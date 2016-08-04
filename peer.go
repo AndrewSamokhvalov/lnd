@@ -216,7 +216,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 	for _, dbChan := range chans {
 		chanID := dbChan.ChanID
 		lnChan, err := lnwallet.NewLightningChannel(p.server.lnwallet,
-			p.server.lnwallet.ChainNotifier, p.server.chanDB, dbChan)
+			p.server.chainNotifier, p.server.chanDB, dbChan)
 		if err != nil {
 			return err
 		}
@@ -655,8 +655,7 @@ func (p *peer) handleLocalClose(req *closeLinkReq) {
 	// confirmation.
 	go func() {
 		// TODO(roasbeef): add param for num needed confs
-		notifier := p.server.lnwallet.ChainNotifier
-		confNtfn, _ := notifier.RegisterConfirmationsNtfn(txid, 1)
+		confNtfn, _ := p.server.chainNotifier.RegisterConfirmationsNtfn(txid, 1)
 
 		var success bool
 		select {
