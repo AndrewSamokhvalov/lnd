@@ -1,5 +1,5 @@
-hash: c830766cab9e452ee12d57e983d999375d2c2cdadb4f5bed4e7806b1ecd4ca9d
-updated: 2016-07-26T10:40:18.856395-07:00
+hash: e79af602e5aef5b222a9cf3938fa00014a751ad8241381abf99bacf75197fada
+updated: 2016-08-11T12:13:09.944357494-07:00
 imports:
 - name: github.com/boltdb/bolt
   version: dfb21201d9270c1082d5fb0f07f500311ff72f18
@@ -38,11 +38,11 @@ imports:
   subpackages:
   - spew
 - name: github.com/golang/protobuf
-  version: 874264fbbb43f4d91e999fecb4b40143ed611400
+  version: 2c1988e8c18d14b142c0b472624f71647cf39adb
   subpackages:
   - proto
 - name: github.com/howeyc/gopass
-  version: 66487b23f2880ba32e185121d2cd51a338ea069a
+  version: b63a7d07e65df376d14e2d72907a93d4847dffe4
 - name: github.com/roasbeef/btcd
   version: baea7691cc3c59480703fe1a3fb5595c838c963c
   subpackages:
@@ -52,7 +52,6 @@ imports:
   - chaincfg
   - txscript
   - wire
-  - rpctest
   - database
 - name: github.com/roasbeef/btcrpcclient
   version: 2c6c5c5671f6e86d42b84da30cafcd80e3313b41
@@ -65,19 +64,19 @@ imports:
   - txsort
   - base58
 - name: github.com/roasbeef/btcwallet
-  version: d7d402cc4135a53230ce068dcc51252c58a11a3d
+  version: 1fd2d6224698e14591d06f2a10b24e86494cc19f
   subpackages:
   - chain
   - waddrmgr
   - wallet
   - walletdb/bdb
+  - walletdb
   - internal/zero
   - snacl
-  - walletdb
-  - wtxmgr
   - internal/prompt
   - wallet/txauthor
   - wallet/txrules
+  - wtxmgr
   - internal/legacy/keystore
   - internal/helpers
   - wallet/internal/txsizes
@@ -85,7 +84,7 @@ imports:
 - name: github.com/urfave/cli
   version: 1efa31f08b9333f1bd4882d61f9d668a70cd902e
 - name: golang.org/x/crypto
-  version: bc89c496413265e715159bdc8478ee9a92fdc265
+  version: 595bbbd7f5f308415a544d3c55743c91427c8d99
   subpackages:
   - hkdf
   - nacl/secretbox
@@ -96,7 +95,7 @@ imports:
   - pbkdf2
   - ssh/terminal
 - name: golang.org/x/net
-  version: 9f2c271364b418388d150f9c12ecbf12794095c1
+  version: 075e191f18186a8ff2becaf64478e30f4545cdad
   subpackages:
   - context
   - http2
