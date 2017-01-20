@@ -163,6 +163,10 @@ type PaymentDescriptor struct {
 	// isForwarded denotes if an incoming HTLC has been forwarded to any
 	// possible upstream peers in the route.
 	isForwarded bool
+	// isIncluded denotes if an incoming HTLC has been included in both
+	// commit tx and now it is eligable for forwarding.
+	isIncluded bool
+	settled    bool
 
 	// pkScript is the raw public key  script that encodes the redemption
 	// rules for this particular HTLC. This field will only be populated
