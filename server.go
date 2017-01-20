@@ -874,7 +874,6 @@ func (s *server) OpenChannel(peerID int32, nodeKey *btcec.PublicKey,
 	}
 
 	s.queries <- req
-
 	return updateChan, errChan
 }
 
