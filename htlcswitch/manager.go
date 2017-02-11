@@ -753,19 +753,19 @@ func (mgr *htlcManager) HopID() *routing.HopID {
 // htlc arrived
 // and delayed (T)
 // channel state
-// update was			 update channel state
-// initialised 				   +
-//    +					   |
-//    |					   |
+// update was                    update channel state
+// initialised                             |
+//    |                                    |
+//    |                                    |
 //  --x----x-------------------------------x----------> t
-//    |	   |				   |
-//    |    +				   |
-//    | another htlc arrived		   |
-//    | but update already 		   |
-//    | initiated			   |
-//    |		   		   	   |
+//    |    |                               |
+//    |    |                               |
+//    | another htlc arrived               |
+//    | but update already                 |
+//    | initiated                          |
+//    |                                    |
 //    | <--------------------------------> |
-//			T
+//                     T
 //
 func (mgr *htlcManager) updateCommitTx(immediately bool) error {
 	mgr.updateMutex.Lock()
