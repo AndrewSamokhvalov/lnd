@@ -21,8 +21,15 @@ import (
 
 	"bytes"
 
+	"sync/atomic"
+
+	"io"
+
 	"github.com/go-errors/errors"
+	"github.com/lightningnetwork/lnd/brontide"
 	"github.com/lightningnetwork/lnd/lnrpc"
+	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/chaincfg"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/rpctest"
@@ -983,4 +990,443 @@ func (n *networkHarness) SendCoins(ctx context.Context, amt btcutil.Amount,
 			return fmt.Errorf("balances not synced after deadline")
 		}
 	}
+}
+
+// connectionBridge is an integration helper which is used to connect the
+// Alice and Bob to it and have the ability to watch the messages that are
+// flying around between them.
+//
+// NOTE: Now  bridge can't be used because of our inability to retrieve private
+// keys of Alice and Bob dynamically in integration tests. But this struct is
+// done in such a way that it might be used in unit tests too.
+type connectionBridge struct {
+	// alice and bob private keys are needed because of 'brontide'
+	// encryption connection, without it we can't pretend to be Alice for
+	// Bob, and Bob for Alice.
+	alicePrivKey, bobPrivKey *btcec.PrivateKey
+
+	aliceListener, bobListener *brontide.Listener
+	aliceConn, bobConn         net.Conn
+
+	// handler the special object which corresponds the handler interface
+	// and returns the handler function which will be used to handle the
+	// messages which are going through the bridge.
+	handler bridgeHandler
+
+	// capture is an atomic variable which is used to indicate the need
+	// for capturing the message and pass them to handler.
+	capture int32
+
+	stopped int32
+	started int32
+	quit    chan struct{}
+	errChan chan error
+	wg      sync.WaitGroup
+}
+
+// newConnectionBridge creates new instance of bridge.
+func newConnectionBridge(alicePrivKey, bobPrivKey *btcec.PrivateKey,
+	handler bridgeHandler) (*connectionBridge, error) {
+
+	// addresses to which bob and alice should connect.
+	addrForBob := "127.0.0.1:44444"
+	addrForAlice := "127.0.0.1:55555"
+
+	bobListener, err := brontide.NewListener(alicePrivKey, addrForBob)
+	if err != nil {
+		return nil, err
+	}
+
+	aliceListener, err := brontide.NewListener(bobPrivKey, addrForAlice)
+	if err != nil {
+		return nil, err
+	}
+
+	return &connectionBridge{
+		alicePrivKey: alicePrivKey,
+		bobPrivKey:   bobPrivKey,
+
+		aliceListener: aliceListener,
+		bobListener:   bobListener,
+
+		errChan: make(chan error, 10),
+		quit:    make(chan struct{}),
+
+		handler: handler,
+	}, nil
+}
+
+// endpointForAlice returns the net address/endpoint for Alice need to connect
+// so her messages might be captured.
+func (b *connectionBridge) endpointForAlice() *lnwire.NetAddress {
+	return &lnwire.NetAddress{
+		IdentityKey: b.bobPrivKey.PubKey(),
+		Address:     b.aliceListener.Addr().(*net.TCPAddr),
+	}
+}
+
+// endpointForBob returns the net address/endpoint for Bob need to connect
+// so her messages might be captured.
+func (b *connectionBridge) endpointForBob() *lnwire.NetAddress {
+	return &lnwire.NetAddress{
+		IdentityKey: b.alicePrivKey.PubKey(),
+		Address:     b.bobListener.Addr().(*net.TCPAddr),
+	}
+}
+
+// waitForShutdown waits service to be shut down and return internal error if
+// it was sent to us from one of the internal goroutines.
+func (b *connectionBridge) waitForShutdown() error {
+	err := <-b.errChan
+
+	// If service was shut down during some internal error than it wasn't
+	// stopped, so we should do it.
+	if err := b.stop(); err != nil {
+		return err
+	}
+
+	b.wg.Wait()
+	return err
+}
+
+// stop function notifies the subsystem about service shut down.
+func (b *connectionBridge) stop() error {
+	if !atomic.CompareAndSwapInt32(&b.stopped, 0, 1) {
+		return nil
+	}
+
+	b.stopCapturing()
+
+	close(b.quit)
+	close(b.errChan)
+
+	if b.aliceConn != nil {
+		if err := b.aliceConn.Close(); err != nil {
+			return err
+		}
+	}
+
+	if b.bobConn != nil {
+		if err := b.bobConn.Close(); err != nil {
+			return err
+		}
+	}
+
+	if err := b.bobListener.Close(); err != nil {
+		return err
+	}
+
+	if err := b.aliceListener.Close(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// start function executes the retranslation goroutine.
+func (b *connectionBridge) start() {
+	if !atomic.CompareAndSwapInt32(&b.started, 0, 1) {
+		return
+	}
+
+	b.wg.Add(1)
+	go b.startRetranslation()
+}
+
+// startRetranslation initialize listeners and wait for Alice and Bob connect to
+// their endpoints, after that the retransmission will be executed without
+// intercepting the messages.
+//
+// NOTE: Should be executed as goroutine.
+func (b *connectionBridge) startRetranslation() {
+	defer b.wg.Done()
+
+	// Run initialization of connections in standalone goroutines as far as
+	// we don't want to force the user/programmer keep specific order of
+	// dial connections in tests.
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		conn, err := b.bobListener.Accept()
+		select {
+		case <-b.quit:
+		default:
+			if err != nil {
+				b.errChan <- err
+			} else {
+				b.bobConn = conn
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		conn, err := b.aliceListener.Accept()
+		select {
+		case <-b.quit:
+		default:
+			if err != nil {
+				b.errChan <- err
+			} else {
+				b.aliceConn = conn
+			}
+		}
+	}()
+
+	// Wait for connections to be initialized, but also checks service
+	// wasn't shut down during connection initialization.
+	wg.Wait()
+	select {
+	case <-b.quit:
+		return
+	default:
+	}
+
+	handler := b.handler.Handler()
+
+	// Run two standalone goroutines in order re-translate message in non
+	// blocking manner.
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+
+		for {
+			err := b.retransmit(b.aliceConn, b.bobConn, handler)
+			select {
+			case <-b.quit:
+				return
+			default:
+				if err != nil {
+					b.errChan <- err
+					return
+				}
+			}
+		}
+	}()
+
+	b.wg.Add(1)
+	go func() {
+		defer b.wg.Done()
+
+		for {
+			err := b.retransmit(b.bobConn, b.aliceConn, handler)
+			select {
+			case <-b.quit:
+				return
+			default:
+				if err != nil {
+					b.errChan <- err
+					return
+				}
+			}
+		}
+	}()
+}
+
+// startCapturing start intercepting messages that are flying around between
+// nodes and pass the to the handler.
+func (b *connectionBridge) startCapturing() {
+	if !atomic.CompareAndSwapInt32(&b.capture, 0, 1) {
+		return
+	}
+
+	b.handler.Init(b)
+}
+
+// stopCapturing stop intercepting messages that are flying around between
+// nodes.
+func (b *connectionBridge) stopCapturing() {
+	if !atomic.CompareAndSwapInt32(&b.capture, 1, 0) {
+		return
+	}
+
+	b.handler.TearDown()
+}
+
+// retransmit function reads messages from reader (it might be first tcp
+// connection), pass it to the handler function and retransmit message to
+// writer (it might be second tcp connection).
+func (b *connectionBridge) retransmit(r io.Reader, w io.Writer,
+	f func(lnwire.Message) (bool, error)) error {
+
+	n, msg, _, err := lnwire.ReadMessage(r, 0, wire.SimNet)
+	if err != nil {
+		return err
+	} else if n == 0 {
+		return nil
+	}
+
+	if atomic.LoadInt32(&b.capture) == 1 {
+		if skip, err := f(msg); err != nil {
+			return err
+		} else if skip {
+			return nil
+		}
+	}
+
+	_, err = lnwire.WriteMessage(w, msg, 0, wire.SimNet)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// bridgeHandler is an interface which represent the bridge message handler.
+type bridgeHandler interface {
+	// Init used to initialize the handler before the message capturing
+	// is started.
+	Init(*connectionBridge)
+
+	// TearDown used to do all necessary work before message capturing is
+	// stopped. Even if intercepting will be stopped without handling all
+	// intercepted messages they should be safely sent to other side without
+	// loss.
+	TearDown()
+
+	// Handler returns the function which will be used as handler for
+	// messages that flying around between nodes. This function should
+	// return the error and bool - should this message be sent to another
+	// side.
+	// NOTE: Be aware that message might be sent to handler even if
+	// capturing was stopped because of async behaviour of goroutines.
+	Handler() func(msg lnwire.Message) (bool, error)
+}
+
+// stopHandler is handler which is used when intercepted messages need to be
+// read one by one
+type stopHandler struct {
+	next    chan bool
+	msgChan chan lnwire.Message
+	bridge  *connectionBridge
+}
+
+// newStopHandler returns new instance of stopHandler.
+func newStopHandler() *stopHandler {
+	return &stopHandler{
+		msgChan: make(chan lnwire.Message),
+	}
+}
+
+// Init The message will not be sent to other party until it will be
+// read.
+// NOTE: Part of the bridgeHandler interface.
+func (h *stopHandler) Init(bridge *connectionBridge) {
+	h.bridge = bridge
+	h.next = make(chan bool)
+}
+
+// TearDown function close the 'next' channel thereby gives the ability for
+// all messages that were waiting to be read to be sent to remote side.
+// NOTE: Part of the bridgeHandler interface.
+func (h *stopHandler) TearDown() {
+	close(h.next)
+}
+
+// Handler stops retransmission of message until message is read by
+// getCapturedMessage function.
+// NOTE: Part of the bridgeHandler interface.
+func (h *stopHandler) Handler() func(msg lnwire.Message) (bool, error) {
+	return func(msg lnwire.Message) (bool, error) {
+		_, ok := <-h.next
+		if !ok {
+			return false, nil
+		}
+
+		h.msgChan <- msg
+		return false, nil
+	}
+}
+
+// getCapturedMessage waits for messages to be sent over bridge and returns
+// it after it was intercepted.
+func (h *stopHandler) getCapturedMessage() (lnwire.Message, error) {
+	if atomic.LoadInt32(&h.bridge.capture) == 0 {
+		return nil, errors.New("interception was stopped")
+	}
+
+	select {
+	case h.next <- true:
+	case <-h.bridge.quit:
+		return nil, errors.New("bridge was closed")
+	}
+
+	select {
+	case msg := <-h.msgChan:
+		return msg, nil
+	case <-h.bridge.quit:
+		return nil, errors.New("bridge was closed")
+	}
+}
+
+// dynamicHandler might be used inside the test on order to not create the
+// handler globally. It is needed if handler will be used only on test level.
+type dynamicHandler struct {
+	init     func(bridge *connectionBridge)
+	tearDown func()
+	handler  func(msg lnwire.Message) (bool, error)
+	mutex    sync.Mutex
+}
+
+// NOTE: Part of the bridgeHandler interface.
+func (h *dynamicHandler) Init(bridge *connectionBridge) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	if h.init != nil {
+		h.init(bridge)
+	}
+}
+
+// NOTE: Part of the bridgeHandler interface.
+func (h *dynamicHandler) TearDown() {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	if h.tearDown != nil {
+		h.tearDown()
+	}
+}
+
+// NOTE: Part of the bridgeHandler interface.
+func (h *dynamicHandler) Handler() func(msg lnwire.Message) (bool, error) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	if h.handler != nil {
+		return h.handler
+	}
+
+	return func(msg lnwire.Message) (bool, error) {
+		return false, nil
+	}
+}
+
+// SetInit set the init function in safe manner.
+func (h *dynamicHandler) SetInit(f func(bridge *connectionBridge)) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	h.init = f
+}
+
+// SetHandler set the handler function in safe manner.
+func (h *dynamicHandler) SetHandler(f func(msg lnwire.Message) (bool, error)) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	h.handler = f
+}
+
+// SetTearDown set the teardown function in safe manner.
+func (h *dynamicHandler) SetTearDown(f func()) {
+	h.mutex.Lock()
+	defer h.mutex.Unlock()
+
+	h.tearDown = f
 }
