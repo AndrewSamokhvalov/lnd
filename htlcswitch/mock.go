@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
 	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/chainntnfs"
@@ -25,35 +24,27 @@ import (
 // | 				MockServer  				       |
 // + ------------------------------------------------------------------------- +
 type MockServer struct {
-	t          *testing.T
-	name       string
-	debug      bool
-	messages   chan lnwire.Message
-	quit       chan bool
-	id         []byte
-	htlcSwitch *HTLCSwitch
-	wg         sync.WaitGroup
-	record     func(lnwire.Message)
+	t           *testing.T
+	name        string
+	messages    chan lnwire.Message
+	quit        chan bool
+	id          []byte
+	htlcSwitch  *HTLCSwitch
+	wg          sync.WaitGroup
+	recordFuncs []func(lnwire.Message)
 }
 
 var _ Peer = (*MockServer)(nil)
 
-func NewMockServer(t *testing.T, name string, debug bool) *MockServer {
-
-	htlcSwitch, err := NewHTLCSwitch()
-	if err != nil {
-		t.Fatalf("can't initialize htlc switch: %v", err)
-	}
-
+func NewMockServer(t *testing.T, name string) *MockServer {
 	return &MockServer{
-		t:          t,
-		id:         []byte(name),
-		name:       name,
-		messages:   make(chan lnwire.Message, 50),
-		debug:      debug,
-		quit:       make(chan bool),
-		htlcSwitch: htlcSwitch,
-		record:     func(lnwire.Message) {},
+		t:           t,
+		id:          []byte(name),
+		name:        name,
+		messages:    make(chan lnwire.Message, 50),
+		quit:        make(chan bool),
+		htlcSwitch:  NewHTLCSwitch(),
+		recordFuncs: make([]func(lnwire.Message), 0),
 	}
 }
 
@@ -69,7 +60,10 @@ func (s *MockServer) Start() error {
 		for {
 			select {
 			case msg := <-s.messages:
-				s.record(msg)
+				for _, f := range s.recordFuncs {
+					f(msg)
+				}
+
 
 				if err := s.readHandler(msg); err != nil {
 					s.t.Fatalf("%v server error: %v", s.name, err)
@@ -86,7 +80,7 @@ func (s *MockServer) Start() error {
 // Record is used to set the function which will be triggered when new
 // lnwire message was received.
 func (s *MockServer) Record(f func(lnwire.Message)) {
-	s.record = f
+	s.recordFuncs = append(s.recordFuncs, f)
 }
 
 func (s *MockServer) SendMessage(message lnwire.Message) error {
@@ -116,16 +110,9 @@ func (s *MockServer) readHandler(message lnwire.Message) error {
 		return errors.New("unknown message type")
 	}
 
-	if s.debug {
-		c := lnwire.MessageToStringClosure(message)
-		fmt.Printf("\n\n+ -------------------------------------- + \n "+
-			"%v server received: \n %v", s.name, c)
-
-	}
-
 	// Dispatch the commitment update message to the proper
 	// htc manager dedicated to this channel.
-	manager, err := s.htlcSwitch.Get(targetChan)
+	manager, err := s.htlcSwitch.Get(*targetChan)
 	if err != nil {
 		return err
 	}
@@ -141,14 +128,16 @@ func (p *MockServer) WipeChannel(*lnwallet.LightningChannel) error {
 	return nil
 }
 
+func (p *MockServer) LocalChannelClose(*ChanClose) {
+	return
+}
+
 func (p *MockServer) ID() [sha256.Size]byte {
 	return [sha256.Size]byte{}
 }
 
-func (p *MockServer) HopID() *routing.HopID {
-	var hopID routing.HopID
-	copy(hopID[:], btcutil.Hash160(p.id))
-	return &hopID
+func (p *MockServer) PubKey() []byte {
+	return p.id
 }
 
 func (s *MockServer) Disconnect() {
@@ -290,22 +279,23 @@ func (i *MockInvoiceRegistry) AddInvoice(invoice *channeldb.Invoice) error {
 	return nil
 }
 
-var _ InvoiceRegistry = (*MockInvoiceRegistry)(nil)
+var _ InvoiceDatabase = (*MockInvoiceRegistry)(nil)
 
 // + ------------------------------------------------------------------------- +
 // | 				MockHtlcManager 	 		       |
 // + ------------------------------------------------------------------------- +
 type MockHtlcManager struct {
-	Id        []byte
 	ChanPoint *wire.OutPoint
+	peer Peer
 	Requests  chan *SwitchRequest
 }
 
-func NewMockHTLCManager(name string, chanPoint *wire.OutPoint) *MockHtlcManager {
+func NewMockHTLCManager(chanPoint *wire.OutPoint,
+	peer Peer) *MockHtlcManager {
 	return &MockHtlcManager{
-		Id:        []byte(name),
 		ChanPoint: chanPoint,
 		Requests:  make(chan *SwitchRequest, 1),
+		peer: peer,
 	}
 }
 
@@ -342,16 +332,8 @@ func (f *MockHtlcManager) ID() *wire.OutPoint {
 	return f.ChanPoint
 }
 
-func (f *MockHtlcManager) HopID() *routing.HopID {
-	var sphinxID routing.HopID
-	copy(sphinxID[:], f.Id)
-	return &sphinxID
-}
-
-func (f *MockHtlcManager) PeerID() [sha256.Size]byte {
-	var lightningID [sha256.Size]byte
-	copy(lightningID[:], f.Id)
-	return lightningID
+func (f *MockHtlcManager) Peer() Peer {
+	return f.peer
 }
 
 func (f *MockHtlcManager) Start() error {

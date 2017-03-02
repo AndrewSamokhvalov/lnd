@@ -7,6 +7,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/txscript"
@@ -23,10 +24,10 @@ import (
 // counterparties.
 // TODO(roasbeef): closures in config for subsystem pointers to decouple?
 type breachArbiter struct {
-	wallet   *lnwallet.LightningWallet
-	db       *channeldb.DB
-	notifier chainntnfs.ChainNotifier
-	server   *server
+	wallet     *lnwallet.LightningWallet
+	db         *channeldb.DB
+	notifier   chainntnfs.ChainNotifier
+	htlcSwitch *htlcswitch.HTLCSwitch
 
 	// breachObservers is a map which tracks all the active breach
 	// observers we're currently managing. The key of the map is the
@@ -62,13 +63,14 @@ type breachArbiter struct {
 // newBreachArbiter creates a new instance of a breachArbiter initialized with
 // its dependent objects.
 func newBreachArbiter(wallet *lnwallet.LightningWallet, db *channeldb.DB,
-	notifier chainntnfs.ChainNotifier, server *server) *breachArbiter {
+	notifier chainntnfs.ChainNotifier,
+	htlcSwitch *htlcswitch.HTLCSwitch) *breachArbiter {
 
 	return &breachArbiter{
 		wallet:            wallet,
 		db:                db,
 		notifier:          notifier,
-		server:            server,
+		htlcSwitch:        htlcSwitch,
 		breachObservers:   make(map[wire.OutPoint]chan struct{}),
 		breachedContracts: make(chan *retributionInfo),
 		newContracts:      make(chan *lnwallet.LightningChannel),
@@ -372,7 +374,7 @@ func (b *breachArbiter) breachObserver(contract *lnwallet.LightningChannel,
 		// breached in order to ensure any incoming or outgoing
 		// multi-hop HTLCs aren't sent over this link, nor any other
 		// links associated with this peer.
-		b.server.CloseChannel(chanPoint, closeBreach)
+		b.htlcSwitch.CloseChannel(chanPoint, htlcswitch.CloseBreach)
 
 		if err := contract.DeleteState(); err != nil {
 			brarLog.Errorf("unable to delete channel state: %v", err)

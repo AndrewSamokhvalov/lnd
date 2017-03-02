@@ -30,7 +30,7 @@ const (
 	CancelRequest
 )
 
-// SwitchRequest encapsulate
+// SwitchRequest...
 type SwitchRequest struct {
 	// Type is a type of switch request which is used to determine the
 	// necessary behaviour. For example: If HTLC was settled - should we

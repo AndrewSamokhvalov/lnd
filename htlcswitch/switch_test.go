@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"github.com/btcsuite/fastsha256"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightningnetwork/lnd/routing"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"testing"
@@ -24,13 +25,13 @@ var (
 func TestHtlcSwitchForward(t *testing.T) {
 	var request *SwitchRequest
 
-	aliceHltcManager := NewMockHTLCManager("alice", chanPoint1)
-	bobHtlcManager := NewMockHTLCManager("bob", chanPoint2)
+	alicePeer := NewMockServer(t, "alice")
+	bobPeer := NewMockServer(t, "bob")
 
-	htlcSwitch, err := NewHTLCSwitch()
-	if err != nil {
-		t.Fatalf("can't initialize htlc switch: %v", err)
-	}
+	aliceHltcManager := NewMockHTLCManager(chanPoint1, alicePeer)
+	bobHtlcManager := NewMockHTLCManager(chanPoint2, bobPeer)
+
+	htlcSwitch := NewHTLCSwitch()
 	htlcSwitch.Start()
 	htlcSwitch.Add(aliceHltcManager)
 	htlcSwitch.Add(bobHtlcManager)
@@ -40,7 +41,7 @@ func TestHtlcSwitchForward(t *testing.T) {
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
 	request = NewForwardAddRequest(
-		bobHtlcManager.HopID(),
+		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
 		&lnwire.HTLCAddRequest{
 			RedemptionHashes: [][sha256.Size]byte{rhash},
@@ -95,13 +96,13 @@ func TestHtlcSwitchForward(t *testing.T) {
 func TestHtlcSwitchCancel(t *testing.T) {
 	var request *SwitchRequest
 
-	aliceHltcManager := NewMockHTLCManager("alice", chanPoint1)
-	bobHtlcManager := NewMockHTLCManager("bob", chanPoint2)
+	alicePeer := NewMockServer(t, "alice")
+	bobPeer := NewMockServer(t, "bob")
 
-	htlcSwitch, err := NewHTLCSwitch()
-	if err != nil {
-		t.Fatalf("can't initialize htlc switch: %v", err)
-	}
+	aliceHltcManager := NewMockHTLCManager(chanPoint1, alicePeer)
+	bobHtlcManager := NewMockHTLCManager(chanPoint2, bobPeer)
+
+	htlcSwitch := NewHTLCSwitch()
 	htlcSwitch.Start()
 	htlcSwitch.Add(aliceHltcManager)
 	htlcSwitch.Add(bobHtlcManager)
@@ -111,7 +112,7 @@ func TestHtlcSwitchCancel(t *testing.T) {
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
 	request = NewForwardAddRequest(
-		bobHtlcManager.HopID(),
+		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
 		&lnwire.HTLCAddRequest{
 			RedemptionHashes: [][sha256.Size]byte{rhash},
@@ -142,6 +143,101 @@ func TestHtlcSwitchCancel(t *testing.T) {
 		&lnwire.CancelHTLC{},
 		rhash,
 	)
+
+	// Handle the request and checks that payment circuit works properly.
+	if err := htlcSwitch.Forward(request); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-aliceHltcManager.Requests:
+		break
+	case <-time.After(time.Second):
+		t.Fatal("request was not propogated to source")
+	}
+
+	if htlcSwitch.circuits.pending() != 0 {
+		t.Fatal("wrong amount of circuits")
+	}
+}
+
+// TestAddSamePayment tests that we send the payment with the same
+// payment hash.
+func TestAddSamePayment(t *testing.T) {
+	var request *SwitchRequest
+
+	alicePeer := NewMockServer(t, "alice")
+	bobPeer := NewMockServer(t, "bob")
+
+	aliceHltcManager := NewMockHTLCManager(chanPoint1, alicePeer)
+	bobHtlcManager := NewMockHTLCManager(chanPoint2, bobPeer)
+
+	htlcSwitch := NewHTLCSwitch()
+	htlcSwitch.Start()
+	htlcSwitch.Add(aliceHltcManager)
+	htlcSwitch.Add(bobHtlcManager)
+
+	// Create request which should be forwarder from alice htlc manager
+	// to bob htlc manager.
+	preimage := [sha256.Size]byte{1}
+	rhash := fastsha256.Sum256(preimage[:])
+	request = NewForwardAddRequest(
+		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
+		aliceHltcManager.ID(),
+		&lnwire.HTLCAddRequest{
+			RedemptionHashes: [][sha256.Size]byte{rhash},
+		},
+	)
+
+	// Handle the request and checks that bob htlc manager received it.
+	if err := htlcSwitch.Forward(request); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-bobHtlcManager.Requests:
+		break
+	case <-time.After(time.Second):
+		t.Fatal("request was not propogated to destination")
+	}
+
+	if htlcSwitch.circuits.pending() != 1 {
+		t.Fatal("wrong amount of circuits")
+	}
+
+	// Handle the request and checks that bob htlc manager received it.
+	if err := htlcSwitch.Forward(request); err != nil {
+		t.Fatal(err)
+	}
+
+	if htlcSwitch.circuits.pending() != 2 {
+		t.Fatal("wrong amount of circuits")
+	}
+
+	// Create settle request pretending that bob htlc manager handled
+	// the add htlc request and sent the htlc settle request back. This
+	// request should be forwarder back to alice htlc manager.
+	request = NewCancelRequest(
+		bobHtlcManager.ID(),
+		&lnwire.CancelHTLC{},
+		rhash,
+	)
+
+	// Handle the request and checks that payment circuit works properly.
+	if err := htlcSwitch.Forward(request); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-aliceHltcManager.Requests:
+		break
+	case <-time.After(time.Second):
+		t.Fatal("request was not propogated to source")
+	}
+
+	if htlcSwitch.circuits.pending() != 1 {
+		t.Fatal("wrong amount of circuits")
+	}
 
 	// Handle the request and checks that payment circuit works properly.
 	if err := htlcSwitch.Forward(request); err != nil {

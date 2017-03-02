@@ -26,31 +26,6 @@ var (
 	carolPrivKey = []byte("carol priv key")
 )
 
-// makeTestDB creates a new instance of the ChannelDB for testing purposes. A
-// callback which cleans up the created temporary directories is also returned
-// and intended to be executed after the test completes.
-func makeTestDB() (*channeldb.DB, func(), error) {
-	// First, create a temporary directory to be used for the duration of
-	// this test.
-	tempDirName, err := ioutil.TempDir("", "channeldb")
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Next, create channeldb for the first time.
-	cdb, err := channeldb.Open(tempDirName)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cleanUp := func() {
-		cdb.Close()
-		os.RemoveAll(tempDirName)
-	}
-
-	return cdb, cleanUp, nil
-}
-
 // GenerateRandomBytes returns securely generated random bytes.
 // It will return an error if the system's secure random
 // number generator fails to function correctly, in which
@@ -308,13 +283,13 @@ func (c *Cluster) MakeCarolToAlicePayment(amount btcutil.Amount,
 		copy(wrongHopID[:], btcutil.Hash160([]byte("wrong id")))
 
 		hopIterator = NewMockHopIterator(
-			c.bobServer.HopID(),
+			routing.NewHopID(c.bobServer.PubKey()),
 			&wrongHopID,
 		)
 	} else {
 		hopIterator = NewMockHopIterator(
-			c.bobServer.HopID(),
-			c.aliceServer.HopID(),
+			routing.NewHopID(c.bobServer.PubKey()),
+			routing.NewHopID(c.aliceServer.PubKey()),
 		)
 	}
 
@@ -355,7 +330,7 @@ func (c *Cluster) MakeBobToAlicePayment(amount btcutil.Amount) (
 	}
 	c.aliceRegistry.AddInvoice(invoice)
 
-	hopIterator := NewMockHopIterator(c.aliceServer.HopID())
+	hopIterator := NewMockHopIterator(routing.NewHopID(c.aliceServer.PubKey()))
 
 	hop := hopIterator.Next()
 	data, err := hopIterator.ToBytes()
@@ -423,9 +398,9 @@ func CreateCluster(t *testing.T) *Cluster {
 
 	// In order to see the lnwire messages which server is receiving set
 	// 'debug' to the 'true'.
-	aliceServer := NewMockServer(t, "alice", false)
-	bobServer := NewMockServer(t, "bob", false)
-	carolServer := NewMockServer(t, "carol", false)
+	aliceServer := NewMockServer(t, "alice")
+	bobServer := NewMockServer(t, "bob")
+	carolServer := NewMockServer(t, "carol")
 
 	// Create mock decoder instead of sphinx one in order to mock the
 	// route which htlc should follow.

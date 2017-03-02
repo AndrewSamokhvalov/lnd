@@ -1565,21 +1565,42 @@ func (lc *LightningChannel) ReceiveNewCommitment(rawSig []byte) error {
 	return nil
 }
 
-// PendingUpdates returns a boolean value reflecting if there are any pending
-// updates which need to be committed. The state machine has pending updates if
-// the local log index on the local and remote chain tip aren't identical. This
-// indicates that either we have pending updates they need to commit, or vice
-// versa.
-func (lc *LightningChannel) PendingUpdates() bool {
+// NumUnAcked returns the number of unacked changes we've sent. A change is
+// acked once we receive a new update to our local chain from the remote peer.
+func (lc *LightningChannel) NumUnAcked() int {
+	diff := lc.remoteCommitChain.commitments.Len() -
+		lc.localCommitChain.commitments.Len()
+
+	if diff > 0 {
+		return diff
+	} else {
+		return 0
+	}
+}
+
+// NeedUpdate returns a boolean value reflecting if there are any pending
+// updates which need to be committed. The commitment transaction should
+// be updated if we have htlcs which are not committed in remote chain.
+func (lc *LightningChannel) NeedUpdate() bool {
 	lc.RLock()
 	defer lc.RUnlock()
 
-	// TODO(roasbeef): instead check our current counter?
+	return	lc.remoteCommitChain.tip().ourMessageIndex != lc.ourLogCounter ||
+		lc.remoteCommitChain.tip().theirMessageIndex != lc.theirLogCounter
+}
 
-	fullySynced := (lc.localCommitChain.tip().ourMessageIndex ==
+// FullySynced is used to ensures that we receive the commitment transaction
+// back from remote side, and that the updates that we generated are included
+// on both sides, and if not, we generate new commitment transaction which will
+// represents the same state and send it again. This approach adds additonal
+// robustness in case if remote side didn't receive our commitment
+// transaction update message.
+func (lc *LightningChannel) FullySynced() bool {
+	lc.RLock()
+	defer lc.RUnlock()
+
+	return (lc.localCommitChain.tip().ourMessageIndex ==
 		lc.remoteCommitChain.tip().ourMessageIndex)
-
-	return !fullySynced
 }
 
 // RevokeCurrentCommitment revokes the next lowest unrevoked commitment

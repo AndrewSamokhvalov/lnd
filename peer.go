@@ -131,7 +131,7 @@ type peer struct {
 
 	// localCloseChanReqs is a channel in which any local requests to close
 	// a particular channel are sent over.
-	localCloseChanReqs chan *closeChanReq
+	localCloseChanReqs chan *htlcswitch.ChanClose
 
 	// remoteCloseChanReqs is a channel in which any remote requests
 	// (initiated by the remote peer) close a particular channel are sent
@@ -192,7 +192,7 @@ func newPeer(conn net.Conn, connReq *connmgr.ConnReq, server *server,
 		chanSnapshotReqs: make(chan *chanSnapshotReq),
 		newChannels:      make(chan *newChannelMsg, 1),
 
-		localCloseChanReqs:  make(chan *closeChanReq),
+		localCloseChanReqs:  make(chan *htlcswitch.ChanClose),
 		remoteCloseChanReqs: make(chan *lnwire.CloseRequest),
 
 		localSharedFeatures:  nil,
@@ -258,12 +258,12 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 		sphinxDecoder := routing.NewSphinxDecoder(p.server.sphinx)
 		htlcManager := htlcswitch.NewHTLCManager(
 			&htlcswitch.HTLCManagerConfig{
-				Peer:          p,
-				DecodeOnion:   sphinxDecoder.Decode,
+				Peer:             p,
+				DecodeOnion:      sphinxDecoder.Decode,
 				SettledContracts: p.server.breachArbiter.settledContracts,
-				DebugHTLC:     cfg.DebugHTLC,
-				Registry:      p.server.invoices,
-				Forward:       p.server.htlcSwitch.Forward,
+				DebugHTLC:        cfg.DebugHTLC,
+				Registry:         p.server.invoices,
+				Forward:          p.server.htlcSwitch.Forward,
 			}, lnChan)
 
 		if err := p.server.htlcSwitch.Add(htlcManager); err != nil {
@@ -365,7 +365,7 @@ func (p *peer) Disconnect() {
 		// Tell the switch to unregister all links associated with this
 		// peer. Passing nil as the target link indicates that all links
 		// associated with this interface should be closed.
-		p.server.htlcSwitch.RemoveById(p.HopID())
+		p.server.htlcSwitch.RemoveById(routing.NewHopID(p.PubKey()))
 
 		p.server.donePeers <- p
 	}()
@@ -484,7 +484,7 @@ out:
 			p.server.fundingMgr.waitUntilChannelOpen(targetChan)
 			// Dispatch the commitment update message to the proper
 			// active goroutine dedicated to this channel.
-			manager, err := p.server.htlcSwitch.Get(targetChan)
+			manager, err := p.server.htlcSwitch.Get(*targetChan)
 			if err != nil {
 				peerLog.Warn(err)
 				continue
@@ -705,12 +705,12 @@ out:
 			decoder := routing.NewSphinxDecoder(p.server.sphinx)
 			manager := htlcswitch.NewHTLCManager(
 				&htlcswitch.HTLCManagerConfig{
-					Peer:          p,
-					DecodeOnion:   decoder.Decode,
+					Peer:             p,
+					DecodeOnion:      decoder.Decode,
 					SettledContracts: p.server.breachArbiter.settledContracts,
-					DebugHTLC:     cfg.DebugHTLC,
-					Registry:      p.server.invoices,
-					Forward:       p.server.htlcSwitch.Forward,
+					DebugHTLC:        cfg.DebugHTLC,
+					Registry:         p.server.invoices,
+					Forward:          p.server.htlcSwitch.Forward,
 				}, newChan)
 
 			err := p.server.htlcSwitch.Add(manager)
@@ -772,47 +772,47 @@ func (p *peer) executeCooperativeClose(channel *lnwallet.LightningChannel) (*cha
 // unilateral closure of the channel initiated by a local subsystem.
 // TODO(roasbeef): if no more active channels with peer call Remove on connMgr
 // with peerID
-func (p *peer) handleLocalClose(req *closeChanReq) {
+func (p *peer) handleLocalClose(req *htlcswitch.ChanClose) {
 	var (
 		err         error
 		closingTxid *chainhash.Hash
 	)
 
 	p.activeChanMtx.RLock()
-	channel := p.activeChannels[*req.chanPoint]
+	channel := p.activeChannels[*req.ChanPoint]
 	p.activeChanMtx.RUnlock()
 
-	switch req.closeType {
+	switch req.CloseType {
 	// A type of CloseRegular indicates that the user has opted to close
 	// out this channel on-chian, so we execute the cooperative channel
 	// closure workflow.
-	case CloseRegular:
+	case htlcswitch.CloseRegular:
 		closingTxid, err = p.executeCooperativeClose(channel)
 		peerLog.Infof("Attempting cooperative close of "+
-			"ChannelPoint(%v) with txid: %v", req.chanPoint,
+			"ChannelPoint(%v) with txid: %v", req.ChanPoint,
 			closingTxid)
 
 	// A type of CloseBreach indicates that the counterparty has breached
 	// the channel therefore we need to clean up our local state.
-	case CloseBreach:
+	case htlcswitch.CloseBreach:
 		peerLog.Infof("ChannelPoint(%v) has been breached, wiping "+
-			"channel", req.chanPoint)
+			"channel", req.ChanPoint)
 		if err := p.WipeChannel(channel); err != nil {
 			peerLog.Infof("Unable to wipe channel after detected "+
 				"breach: %v", err)
-			req.err <- err
+			req.Err <- err
 			return
 		}
 		return
 	}
 	if err != nil {
-		req.err <- err
+		req.Err <- err
 		return
 	}
 
 	// Update the caller with a new event detailing the current pending
 	// state of this request.
-	req.updates <- &lnrpc.CloseStatusUpdate{
+	req.Updates <- &lnrpc.CloseStatusUpdate{
 		Update: &lnrpc.CloseStatusUpdate_ClosePending{
 			ClosePending: &lnrpc.PendingUpdate{
 				Txid: closingTxid[:],
@@ -828,7 +828,7 @@ func (p *peer) handleLocalClose(req *closeChanReq) {
 		notifier := p.server.chainNotifier
 		confNtfn, err := notifier.RegisterConfirmationsNtfn(closingTxid, 1)
 		if err != nil {
-			req.err <- err
+			req.Err <- err
 			return
 		}
 
@@ -844,9 +844,9 @@ func (p *peer) handleLocalClose(req *closeChanReq) {
 			// The channel has been closed, remove it from any
 			// active indexes, and the database state.
 			peerLog.Infof("ChannelPoint(%v) is now closed at "+
-				"height %v", req.chanPoint, height.BlockHeight)
-			if err := wipeChannel(p, channel); err != nil {
-				req.err <- err
+				"height %v", req.ChanPoint, height.BlockHeight)
+			if err := p.WipeChannel(channel); err != nil {
+				req.Err <- err
 				return
 			}
 		case <-p.quit:
@@ -855,7 +855,7 @@ func (p *peer) handleLocalClose(req *closeChanReq) {
 
 		// Respond to the local subsystem which requested the channel
 		// closure.
-		req.updates <- &lnrpc.CloseStatusUpdate{
+		req.Updates <- &lnrpc.CloseStatusUpdate{
 			Update: &lnrpc.CloseStatusUpdate_ChanClose{
 				ChanClose: &lnrpc.ChannelCloseUpdate{
 					ClosingTxid: closingTxid[:],
@@ -864,7 +864,7 @@ func (p *peer) handleLocalClose(req *closeChanReq) {
 			},
 		}
 
-		p.server.breachArbiter.settledContracts <- req.chanPoint
+		p.server.breachArbiter.settledContracts <- req.ChanPoint
 	}()
 }
 
@@ -927,10 +927,10 @@ func (p *peer) handleRemoteClose(req *lnwire.CloseRequest) {
 // WipeChannel removes the passed channel from all indexes associated with the
 // peer, and deletes the channel from the database.
 func (p *peer) WipeChannel(channel *lnwallet.LightningChannel) error {
-	chanPoint := channel.ChannelPoint()
+	chanPoint := *channel.ChannelPoint()
 
 	p.activeChanMtx.Lock()
-	delete(p.activeChannels, *chanPoint)
+	delete(p.activeChannels, chanPoint)
 	p.activeChanMtx.Unlock()
 
 	// Instruct the Htlc Switch to close this link as the channel is no
@@ -961,13 +961,15 @@ func (p *peer) SendMessage(msg lnwire.Message) error {
 }
 
 func (p *peer) ID() [sha256.Size]byte {
-	data := p.addr.IdentityKey.SerializeCompressed()
-	return fastsha256.Sum256(data)
+	return fastsha256.Sum256(p.PubKey())
 }
 
-func (p *peer) HopID() *routing.HopID {
-	pubKey := p.addr.IdentityKey.SerializeCompressed()
-	return routing.NewHopID(pubKey)
+func (p *peer) PubKey() []byte {
+	return p.addr.IdentityKey.SerializeCompressed()
+}
+
+func (p *peer) LocalChannelClose(req *htlcswitch.ChanClose) {
+	p.localCloseChanReqs <- req
 }
 
 // TODO(roasbeef): make all start/stop mutexes a CAS

@@ -25,7 +25,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/routing"
-	"github.com/roasbeef/btcd/wire"
 )
 
 // server is the main server of the Lightning Network Daemon. The server houses
@@ -197,6 +196,7 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 		return nil, err
 	}
 
+	s.htlcSwitch = htlcswitch.NewHTLCSwitch()
 	s.rpcServer = newRPCServer(s)
 	s.breachArbiter = newBreachArbiter(wallet, chanDB, notifier, s.htlcSwitch)
 
@@ -236,12 +236,6 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 		return nil, err
 	}
 	s.connMgr = cmgr
-
-	htlcSwitch, err := htlcswitch.NewHTLCSwitch()
-	if err != nil {
-		return nil, err
-	}
-	s.htlcSwitch = htlcSwitch
 
 	// In order to promote liveness of our active channels, instruct the
 	// connection manager to attempt to establish and maintain persistent
@@ -883,6 +877,7 @@ func (s *server) OpenChannel(peerID int32, nodeKey *btcec.PublicKey,
 	}
 
 	s.queries <- req
+
 	return updateChan, errChan
 }
 

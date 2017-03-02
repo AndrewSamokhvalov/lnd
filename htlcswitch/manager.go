@@ -2,7 +2,6 @@ package htlcswitch
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -13,26 +12,33 @@ import (
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// InvoiceRegistry is an interface which represents the system which may
-// search and settle invoices. Such interface abstraction helps as to
-// create simple mock representation of this subsystem in unit tests.
+// InvoiceDatabase is an interface which represents the system which may
+// search and settle invoices.
 // TODO(andrew.shvv) should be moved in other place.
-type InvoiceRegistry interface {
+type InvoiceDatabase interface {
+	// AddInvoice...
 	AddInvoice(*channeldb.Invoice) error
+
+	// LookupInvoice...
 	LookupInvoice(chainhash.Hash) (*channeldb.Invoice, error)
+
+	// SettleInvoice...
 	SettleInvoice(chainhash.Hash) error
 }
 
 // Peer is an interface which represents the remote lightning node inside our
-// system. Such interface abstraction helps as to create simple
-// mock representation of this subsystem in unit tests.
+// system.
 // TODO(andrew.shvv) should be moved in other place.
 type Peer interface {
 	// SendMessage sends message to current peer.
 	SendMessage(lnwire.Message) error
+
+	// LocalChannelClose...
+	LocalChannelClose(*ChanClose)
 
 	// WipeChannel removes the passed channel from all indexes associated
 	// with the peer, and deletes the channel from the database.
@@ -41,19 +47,22 @@ type Peer interface {
 	// ID is a lightning network peer id.
 	ID() [sha256.Size]byte
 
-	// HopID is id which represent node in terms of routing.
-	HopID() *routing.HopID
+	// PubKey...
+	PubKey() []byte
 
 	// Disconnect disconnects peer if we have error which we can;t
 	// properly handle.
 	Disconnect()
 }
 
+const (
+	// updateDelay is used to initialize update commitment tx timer.
+	updateDelay = 30 * time.Millisecond
+)
+
 // HTLCManager is an interface which represents the subsystem for managing
 // the incoming HTLC requests, applying the changes to the channel, and also
 // propagating the HTLCs to HTLC switch if needed.
-// NOTE: Such interface abstraction helps as to create simple mock
-// representation of this  subsystem in unit tests.
 type HTLCManager interface {
 	// HandleRequest handles the switch requests which forwarded to us
 	// from another peer.
@@ -82,12 +91,8 @@ type HTLCManager interface {
 	// ID return the id of the managed channel.
 	ID() *wire.OutPoint
 
-	// PeerID return the id of peer to which managed channel belongs.
-	PeerID() [sha256.Size]byte
-
-	// HopID return the id which is used within HTLC switch to route
-	// the HTLC requests.
-	HopID() *routing.HopID
+	// Peer...
+	Peer() Peer
 
 	// Start is used to start the HTLC manager: receive incoming requests,
 	// handle the channel notification, and also print some statistics.
@@ -102,11 +107,11 @@ type handleMessageCommand struct {
 	err     chan error
 }
 
-// handleRequestCommand encapsulates switch request and adds error channel to
+// forwardRequest encapsulates switch request and adds error channel to
 // receive response from request handler.
-type handleRequestCommand struct {
-	request *SwitchRequest
-	err     chan error
+type requestForward struct {
+	req *SwitchRequest
+	err chan error
 }
 
 // HTLCManagerConfig defines the configuration for the htlcManager. ALL elements
@@ -129,7 +134,7 @@ type HTLCManagerConfig struct {
 
 	// Registry is a sub-system which responsible for managing the
 	// invoices set in thread-safe manner .
-	Registry InvoiceRegistry
+	Registry InvoiceDatabase
 
 	// SettledContracts is used to notify the breachArbiter that a channel
 	// has peacefully been closed. Once a channel has been closed the
@@ -149,7 +154,10 @@ type HTLCManagerConfig struct {
 // forwarding. Additionally, the htlcManager encapsulate logic of commitment
 // protocol message ordering and updates.
 type htlcManager struct {
-	service *Service
+	started  int32
+	shutdown int32
+	wg       sync.WaitGroup
+	quit     chan bool
 
 	// cfg is a structure which carries all dependable fields/handler
 	// which may affect behaviour of thi service.
@@ -158,13 +166,6 @@ type htlcManager struct {
 	// notSettleHTLCs is a map of outgoing HTLC's we've committed to in
 	// our chain which have not yet been settled by the peer.
 	notSettleHTLCs map[uint32]*SwitchRequest
-
-	// updateMutex is used to be sure in thread safeness of update function
-	// behaviour.
-	updateMutex sync.Mutex
-
-	// updateTimer is used to postpone the execution of update commitment.
-	updateTimer *time.Timer
 
 	// cancelReasons stores the reason why a particular HTLC was cancelled.
 	// The index of the HTLC within the log is mapped to the cancellation
@@ -182,6 +183,16 @@ type htlcManager struct {
 	// commands is a channel which used for handling the inner system
 	// requests.
 	commands chan interface{}
+
+	// delayedUpdateTicker is a update ticker which is sent upon if
+	// we go an interval without receiving/sending a commitment update. It's
+	// role is to ensure both chains converge to identical state in a timely
+	// manner.
+	delayedUpdateTicker *time.Ticker
+
+	// delayedUpdate is a channel of update ticker which triggers the
+	// update commit update.
+	delayedUpdate <-chan time.Time
 }
 
 // A compile time check to ensure htlcManager implements the
@@ -192,15 +203,15 @@ var _ HTLCManager = (*htlcManager)(nil)
 func NewHTLCManager(cfg *HTLCManagerConfig,
 	channel *lnwallet.LightningChannel) HTLCManager {
 
-	name := fmt.Sprintf("HTLC manager(%v)", channel.ChannelPoint())
 	return &htlcManager{
-		channel:        channel,
-		cfg:            cfg,
-		service:        NewService(name),
-		notSettleHTLCs: make(map[uint32]*SwitchRequest),
-		blobs:          make(map[uint32][]byte),
-		commands:       make(chan interface{}),
-		cancelReasons:  make(map[uint32]lnwire.CancelReason),
+		cfg:                 cfg,
+		channel:             channel,
+		notSettleHTLCs:      make(map[uint32]*SwitchRequest),
+		blobs:               make(map[uint32][]byte),
+		commands:            make(chan interface{}),
+		cancelReasons:       make(map[uint32]lnwire.CancelReason),
+		delayedUpdateTicker: time.NewTicker(updateDelay),
+		quit:                make(chan bool, 1),
 	}
 }
 
@@ -216,12 +227,12 @@ func (mgr *htlcManager) HandleMessage(message lnwire.Message) error {
 	case mgr.commands <- command:
 		err := <-command.err
 		if err != nil {
-			log.Errorf("error while message handling in %v"+
-				": %v", mgr.service.Name, err)
-			mgr.cfg.Peer.Disconnect()
+			log.Errorf("error while message handling in htlc "+
+				"manager(%v): %v", mgr.ID(), err)
 		}
 		return err
-	case <-mgr.service.Quit:
+
+	case <-mgr.quit:
 		return nil
 	}
 }
@@ -231,10 +242,9 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 	switch msg := message.(type) {
 
 	case *lnwire.CancelHTLC:
-		htlc := msg
-
-		idx := uint32(htlc.HTLCKey)
+		idx := uint32(msg.HTLCKey)
 		if err := mgr.channel.ReceiveCancelHTLC(idx); err != nil {
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unable to recv HTLC cancel: %v", err)
 		}
 
@@ -242,16 +252,15 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 		// be included we should save the reason of HTLC cancellation
 		// and then use it later to notify user or propagate cancel HTLC
 		// message to another peer over htlc switch.
-		mgr.cancelReasons[idx] = htlc.Reason
-		mgr.updateCommitTx(false)
+		mgr.cancelReasons[idx] = msg.Reason
+		mgr.delayedUpdateCommitTx()
 
 	case *lnwire.HTLCAddRequest:
-		htlc := msg
-
 		// We just received an add request from an remote peer, so we
 		// add it to our state machine.
-		index, err := mgr.channel.ReceiveHTLC(htlc)
+		index, err := mgr.channel.ReceiveHTLC(msg)
 		if err != nil {
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("receiving HTLC rejected: %v", err)
 		}
 
@@ -261,58 +270,69 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 		// Store the onion blob which encapsulate the HTLC route and
 		// use in on stage of HTLC inclusion to propagate the HTLC
 		// farther.
-		mgr.blobs[index] = htlc.OnionBlob
-		mgr.updateCommitTx(false)
+		mgr.blobs[index] = msg.OnionBlob
+		mgr.delayedUpdateCommitTx()
 
 	case *lnwire.HTLCSettleRequest:
-		htlc := msg
-
 		// TODO(roasbeef): this assumes no "multi-sig"
-		pre := htlc.RedemptionProofs[0]
-		idx := uint32(htlc.HTLCKey)
+		pre := msg.RedemptionProofs[0]
+		idx := uint32(msg.HTLCKey)
 		if err := mgr.channel.ReceiveHTLCSettle(pre, idx); err != nil {
 			// TODO(roasbeef): broadcast on-chain
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("settle for outgoing HTLC rejected: %v", err)
 		}
-
-		mgr.updateCommitTx(false)
+		mgr.delayedUpdateCommitTx()
 
 	// TODO(roasbeef): add pre-image to DB in order to swipe
 	// repeated r-values
 	case *lnwire.CommitSignature:
-		commit := msg
-
 		// We just received a new update to our local commitment chain,
 		// validate this new commitment, closing the link if invalid.
 		// TODO(roasbeef): use uint64 for indexes?
-		index := uint32(commit.LogIndex)
-		sig := commit.CommitSig.Serialize()
+		index := uint32(msg.LogIndex)
+		sig := msg.CommitSig.Serialize()
 		if err := mgr.channel.ReceiveNewCommitment(sig, index); err != nil {
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unable to accept new commitment: %v", err)
 		}
 
-		// Update commitment transaction without delay.
-		if err := mgr.updateCommitTx(true); err != nil {
-			return err
+		if mgr.channel.NumUnAcked() == 0 {
+			// If should not receive any additional commit
+			// sig message from remote side than, the order of
+			// messages should be strict.
+			if err := mgr.updateCommitTx(); err != nil {
+				mgr.cfg.Peer.Disconnect()
+				return errors.Errorf("can't update commit tx: "+
+					"%v", err)
+			}
+		} else {
+			// If we sign and send some number of commitment
+			// signature messages and didn't get the response from
+			// remote side, it means, that we should receive it in
+			// future, so the sending of commit and revocation
+			// messages are not interrelated in case of number of
+			// unacked message greater then zero.
+			mgr.delayedUpdateCommitTx()
 		}
 
 		// Finally, since we just accepted a new state, send the remote
 		// peer a revocation for our prior cm.
 		revocation, err := mgr.channel.RevokeCurrentCommitment()
 		if err != nil {
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unable to revoke current commitment: "+
 				"%v", err)
 		}
 		mgr.cfg.Peer.SendMessage(revocation)
 
 	case *lnwire.CommitRevocation:
-		revocation := msg
-
 		// We've received a revocation from the remote chain, if valid,
 		// this moves the remote chain forward, and expands our
 		// revocation window.
-		htlcs, err := mgr.channel.ReceiveRevocation(revocation)
+		htlcs, err := mgr.channel.ReceiveRevocation(msg)
 		if err != nil {
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unable to accept revocation: %v", err)
 		}
 
@@ -320,8 +340,9 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 		// remote/local commitment transactions they might be
 		// safely propagated over HTLC switch or settled if our node was
 		// last node in HTLC path.
-		requestsToForward, err := mgr.processIncludedHTLCs(htlcs)
+		requestsToForward, err := mgr.processHTLCsIncludedInBothChains(htlcs)
 		if err != nil {
+			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unbale procees included htlcs: %v", err)
 		}
 
@@ -346,20 +367,21 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 // HandleMessage handles the HTLC requests which sent to us from remote peer.
 // NOTE: Part of the HTLCManager interface.
 func (mgr *htlcManager) HandleRequest(request *SwitchRequest) error {
-	command := &handleRequestCommand{
-		request: request,
-		err:     make(chan error),
+	command := &requestForward{
+		req: request,
+		err: make(chan error),
 	}
 
 	select {
 	case mgr.commands <- command:
 		err := <-command.err
 		if err != nil {
-			log.Errorf("error while request handling in %v:"+
-				" %v", mgr.service.Name, err)
+			log.Errorf("error while request handling in htlc "+
+				"manager(%v): %v", mgr.ID(), err)
 		}
 		return err
-	case <-mgr.service.Quit:
+
+	case <-mgr.quit:
 		return nil
 	}
 }
@@ -413,13 +435,21 @@ func (mgr *htlcManager) handleRequest(request *SwitchRequest) error {
 // Start starts all helper goroutines required for the operation of the HTLC
 // manager.
 func (mgr *htlcManager) Start() error {
-	if err := mgr.service.Start(); err != nil {
-		log.Warn(err)
+	if !atomic.CompareAndSwapInt32(&mgr.started, 0, 1) {
+		log.Warn("htlc manager(%v) already started", mgr.ID())
 		return nil
 	}
 
-	mgr.service.Go(mgr.startHandleNotifications)
-	mgr.service.Go(mgr.startHandleCommands)
+	log.Info("htlc manager(%v) starting", mgr.ID())
+
+	// If daemon was shut down during waiting for update, than
+	// commitment update message wasn't sent. For that reason we need to
+	// ensure that we include in commit transactions all htlc updates and
+	// send it to the remote side update.
+	mgr.delayedUpdateCommitTx()
+
+	mgr.wg.Add(1)
+	go mgr.startHandle()
 
 	// A new session for this active channel has just started, therefore we
 	// need to send our initial revocation window to the remote peer.
@@ -438,41 +468,28 @@ func (mgr *htlcManager) Start() error {
 // Stop gracefully stops all active helper goroutines, then waits until they've
 // exited.
 func (mgr *htlcManager) Stop() {
-	if err := mgr.service.Stop(nil); err != nil {
-		log.Warn(err)
+	if !atomic.CompareAndSwapInt32(&mgr.shutdown, 0, 1) {
+		log.Warn("htlc manager(%v) already stopped", mgr.ID())
+		return
 	}
+
+	log.Info("htlc manager(%v) stopping", mgr.ID())
+
+	close(mgr.quit)
 }
 
 // Wait waits for service to stop.
 // NOTE: This function is separated from Stop function because of deadlock
 // possibility - when in handler itself we trigger Stop function of this
 // service it leads to deadlock. (for example in WipeChannel function)
-func (mgr *htlcManager) Wait() error {
-	return mgr.service.Wait()
+func (mgr *htlcManager) Wait() {
+	mgr.wg.Wait()
 }
 
-// handleCommands handles the inner service commands.
-func (mgr *htlcManager) startHandleCommands() {
-	defer mgr.service.Done()
-
-	for {
-		select {
-		case command := <-mgr.commands:
-			switch r := command.(type) {
-			case *handleMessageCommand:
-				r.err <- mgr.handleMessage(r.message)
-			case *handleRequestCommand:
-				r.err <- mgr.handleRequest(r.request)
-			}
-		case <-mgr.service.Quit:
-			return
-		}
-	}
-}
-
-// handleNotifications handles the channel closing notifications.
-func (mgr *htlcManager) startHandleNotifications() {
-	defer mgr.service.Done()
+// startHandle handles the channel closing notifications.
+// NOTE: Should be started as goroutine.
+func (mgr *htlcManager) startHandle() {
+	defer mgr.wg.Done()
 	// TODO(roasbeef): check to see if able to settle any currently pending
 	// HTLC's
 	//   * also need signals when new invoices are added by the invoiceRegistry
@@ -495,19 +512,35 @@ func (mgr *htlcManager) startHandleNotifications() {
 		case <-mgr.channel.ForceCloseSignal:
 			log.Warnf("ChannelPoint(%v) has been force "+
 				"closed, disconnecting from peerID(%x)",
-				mgr.ID(), mgr.PeerID())
+				mgr.ID(), mgr.Peer().ID())
 			return
 
-		case <-mgr.service.Quit:
+		case command := <-mgr.commands:
+			switch r := command.(type) {
+			case *handleMessageCommand:
+				r.err <- mgr.handleMessage(r.message)
+			case *requestForward:
+				r.err <- mgr.handleRequest(r.req)
+			}
+
+		case <-mgr.delayedUpdate:
+			if err := mgr.updateCommitTx(); err != nil {
+				log.Errorf("can't immediately update commit "+
+					"tx: %v", err)
+				mgr.cfg.Peer.Disconnect()
+				return
+			}
+
+		case <-mgr.quit:
 			return
 		}
 	}
 }
 
-// processIncludedHTLCs this function is used to proceed the HTLCs which was
-// designated as eligible for forwarding. But not all HTLC will be forwarder,
-// if HTLC reached its final destination that we should settle it.
-func (mgr *htlcManager) processIncludedHTLCs(
+// processHTLCsIncludedInBothChains this function is used to proceed the HTLCs
+// which was designated as eligible for forwarding. But not all HTLC will be
+// forwarder, if HTLC reached its final destination that we should settle it.
+func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 	paymentDescriptors []*lnwallet.PaymentDescriptor) ([]*SwitchRequest,
 	error) {
 
@@ -727,58 +760,54 @@ func (mgr *htlcManager) ID() *wire.OutPoint {
 	return mgr.channel.ChannelPoint()
 }
 
-// PeerID is an id of the peer to which lightning channel is belongs.
-// NOTE: Part of the HTLCManager interface.
-func (mgr *htlcManager) PeerID() [sha256.Size]byte {
-	return mgr.cfg.Peer.ID()
+// Peer...
+func (mgr *htlcManager) Peer() Peer {
+	return mgr.cfg.Peer
 }
 
-// HopID is an id of the peer which is used by htlc switch in order to properly
-// propagate the htlc requests.
-// NOTE: Part of the HTLCManager interface.
-func (mgr *htlcManager) HopID() *routing.HopID {
-	return mgr.cfg.Peer.HopID()
-}
-
-// updateCommitTx signs, then sends an update to the remote peer adding a new
-// commitment to their commitment chain which includes all the latest updates
-// we've received+processed up to this point. This function have two mode:
-// * Delayed mode - used to delay commitment update process when we receive HTLC
-// 	update, it reduces the number of commitment update message between nodes.
-//	If number of HTLCs was received update period than only one update
-// 	will be send.
-// * Immediate mode - used when we need send commit sig in sync manner.
-//
+// delayedUpdateCommitTx used to delay update of commitment transaction when we
+// receive HTLC update. Such behaviour reduces the number of commitment update
+// message between nodes in case of intensive flow of HTLC updates as far
+// as update will be triggered not each time, but instead if number of
+// HTLCs was received during update period than only one update will be
+// triggered. Example:
 //
 // htlc arrived
-// and delayed (T)
+// and delayed
 // channel state
-// update was                    update channel state
-// initialised                             |
-//    |                                    |
-//    |                                    |
-//  --x----x-------------------------------x----------> t
-//    |    |                               |
-//    |    |                               |
-//    | another htlc arrived               |
-//    | but update already                 |
-//    | initiated                          |
-//    |                                    |
-//    | <--------------------------------> |
-//                     T
+// update was           update channel state.
+// initiated                       |
+// with period T.                  |
+//    |                            |
+//    |                            |
+// o--x----x-x-x-----x-------------x------> t
+//    |    | | |     |             |
+//    |    \_\_\____/              |
+//    |         |                  |
+//    | another htlcs are arrived  |
+//    | but update already         |
+//    | initiated.                 |
+//    |                            |
+//    | <------------------------> |
+//                  T
 //
-func (mgr *htlcManager) updateCommitTx(immediately bool) error {
-	mgr.updateMutex.Lock()
-	defer mgr.updateMutex.Unlock()
+func (mgr *htlcManager) delayedUpdateCommitTx() {
+	// If update was already initiated than wait for it to be triggered.
+	if mgr.delayedUpdate == nil {
+		mgr.delayedUpdateTicker = time.NewTicker(updateDelay)
+		mgr.delayedUpdate = mgr.delayedUpdateTicker.C
+	}
+}
 
-	update := func() error {
-		if !mgr.channel.NeedUpdate() {
-			return nil
-		}
-
+// updateCommitTx signs, then sends an commit tx update to the remote peer
+// adding a new commitment to their commitment chain which includes all the
+// latest updates we've received+processed up to this point.
+func (mgr *htlcManager) updateCommitTx() error {
+	if mgr.channel.NeedUpdate() || !mgr.channel.FullySynced() {
 		sigTheirs, logIndexTheirs, err := mgr.channel.SignNextCommitment()
 		if err == lnwallet.ErrNoWindow {
 			log.Trace(err)
+			return nil
 		} else if err != nil {
 			return errors.Errorf("unable to update commitment: %v", err)
 		}
@@ -797,43 +826,14 @@ func (mgr *htlcManager) updateCommitTx(immediately bool) error {
 		if err := mgr.cfg.Peer.SendMessage(commitSig); err != nil {
 			return errors.Errorf("unable to update commitment: %v", err)
 		}
-
-		return nil
 	}
 
-	if immediately {
-		// We should stop the update commit tx timer if it was
-		// initialized before.
-		if mgr.updateTimer != nil {
-			if mgr.updateTimer.Stop() {
-				mgr.updateTimer = nil
-			} else {
-				return errors.New("can't stop update commit " +
-					"tx timer")
-			}
-		}
+	// By setting the channel to nil, we make available for
+	// another delayed update to be triggered.
+	mgr.delayedUpdate = nil
 
-		return update()
-
-	} else {
-		// If timer wasn't set before than initialize new delayed
-		// commit tx update, otherwise wait for previously initialized
-		// update to be triggered.
-		if mgr.updateTimer == nil {
-			mgr.updateTimer = time.NewTimer(10 * time.Millisecond)
-			go func() {
-				<-mgr.updateTimer.C
-
-				mgr.updateMutex.Lock()
-				if err := update(); err != nil {
-					log.Error(err)
-					mgr.cfg.Peer.Disconnect()
-				}
-				mgr.updateTimer = nil
-				mgr.updateMutex.Unlock()
-			}()
-		}
-	}
+	// Prevent ticker from leaking.
+	mgr.delayedUpdateTicker.Stop()
 
 	return nil
 }

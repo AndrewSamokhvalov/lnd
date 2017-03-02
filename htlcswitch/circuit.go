@@ -9,16 +9,17 @@ import (
 	"sync"
 )
 
-// CircuitKey uniquely identifies an active Sphinx (onion routing) circuit
+// circuitKey uniquely identifies an active Sphinx (onion routing) circuit
 // between two open channels. Currently, the rHash of the HTLC which created
 // the circuit is used to uniquely identify each circuit.
-type CircuitKey [sha256.Size]byte
+type circuitKey [sha256.Size]byte
 
-func (k *CircuitKey) String() string {
+// String represent the circuit key in string format.
+func (k *circuitKey) String() string {
 	return hex.EncodeToString(k[:])
 }
 
-// PaymentCircuit is used by HTLC switch service in order to determine
+// paymentCircuit is used by HTLC switch service in order to determine
 // backward path for settle/cancel HTLC messages. A payment circuit is created
 // once a htlc manager forwards an HTLC add request. Channel points contained
 // within this message is used to identify the source/destination HTLC managers.
@@ -40,42 +41,36 @@ func (k *CircuitKey) String() string {
 // 	      + --------- o --------- +
 //	         1BTC     N2   1BTC
 //
-type PaymentCircuit struct {
-	// PaymentHash used as uniq identifier of payment (not payment circuit)
-	PaymentHash CircuitKey
+type paymentCircuit struct {
+	// PaymentHash used as unique identifier of payment (not payment
+	// circuit).
+	PaymentHash circuitKey
 
 	// Src is the channel id from which add HTLC request is came from and
 	// to which settle/cancel HTLC request will be returned back. Once the
 	// switch forwards the settle message to the source the circuit is
 	// considered to be completed.
-	Src *wire.OutPoint
+	Src wire.OutPoint
 
 	// Dest is the channel id to which we propagate the HTLC add request
 	// and from which we are expecting to receive HTLC settle request back.
-	Dest *wire.OutPoint
+	Dest wire.OutPoint
 }
 
-// NewPaymentCircuit creates new payment circuit instance.
-func NewPaymentCircuit(src, dest *wire.OutPoint, key CircuitKey) *PaymentCircuit {
-	return &PaymentCircuit{
+// newPaymentCircuit creates new payment circuit instance.
+func newPaymentCircuit(src, dest wire.OutPoint, key circuitKey) *paymentCircuit {
+	return &paymentCircuit{
 		Src:         src,
 		Dest:        dest,
 		PaymentHash: key,
 	}
 }
 
-// ID returns unique id of payment circuit.
-func (a *PaymentCircuit) ID() string {
-	return a.Src.String() +
-		a.Dest.String() +
-		a.PaymentHash.String()
-}
-
 // isEqual checks the equality of two payment circuits.
-func (a *PaymentCircuit) IsEqual(b *PaymentCircuit) bool {
+func (a *paymentCircuit) IsEqual(b *paymentCircuit) bool {
 	return bytes.Equal(a.PaymentHash[:], b.PaymentHash[:]) &&
-		a.Src.String() == b.Src.String() &&
-		a.Dest.String() == b.Dest.String()
+		a.Src == b.Src &&
+		a.Dest == b.Dest
 }
 
 // circuitMap is a thread safe, persistent storage of circuits. Each
@@ -84,46 +79,36 @@ func (a *PaymentCircuit) IsEqual(b *PaymentCircuit) bool {
 // identified by payment hash (1-1 mapping).
 type circuitMap struct {
 	mutex    sync.RWMutex
-	circuits map[CircuitKey][]*PaymentCircuit
+	circuits map[circuitKey][]*paymentCircuit
 }
 
 // newCircuitMap initialized circuit map with previously stored circuits and
 // return circuit map instance.
-func newCircuitMap() (*circuitMap, error) {
+func newCircuitMap() *circuitMap {
 	m := &circuitMap{
-		circuits: make(map[CircuitKey][]*PaymentCircuit),
+		circuits: make(map[circuitKey][]*paymentCircuit),
 	}
 
-	return m, nil
+	return m
 }
 
 // add function add circuit in circuit map, and also save it in database in
 // thread safe manner.
-func (m *circuitMap) add(circuit *PaymentCircuit) error {
+func (m *circuitMap) add(circuit *paymentCircuit) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	circuits, ok := m.circuits[circuit.PaymentHash]
-	if ok {
-		for _, c := range circuits {
-			if circuit.IsEqual(c) {
-				return errors.Errorf("Circuit for such "+
-					"destination, source and payment hash "+
-					"already exist %x", circuit)
-			}
-		}
+	m.circuits[circuit.PaymentHash] = append(
+		m.circuits[circuit.PaymentHash],
+		circuit,
+	)
 
-	} else {
-		m.circuits[circuit.PaymentHash] = make([]*PaymentCircuit, 1)
-	}
-
-	m.circuits[circuit.PaymentHash] = append(circuits, circuit)
 	return nil
 }
 
-/// remove function removes circuit from map and database in thread safe manner.
-func (m *circuitMap) remove(key CircuitKey, dest *wire.OutPoint) (
-	*PaymentCircuit, error) {
+// remove function removes circuit from map and database in thread safe manner.
+func (m *circuitMap) remove(key circuitKey, dest wire.OutPoint) (
+	*paymentCircuit, error) {
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -131,7 +116,7 @@ func (m *circuitMap) remove(key CircuitKey, dest *wire.OutPoint) (
 	circuits, ok := m.circuits[key]
 	if ok {
 		for i, circuit := range circuits {
-			if circuit.Dest.String() == dest.String() {
+			if circuit.Dest == dest {
 				// Delete without preserving order
 				// Google: Golang slice tricks
 				circuits[i] = circuits[len(circuits)-1]
@@ -142,6 +127,7 @@ func (m *circuitMap) remove(key CircuitKey, dest *wire.OutPoint) (
 			}
 		}
 	}
+
 	return nil, errors.Errorf("can't find circuit"+
 		" for key %v and destination %v", key, dest.String())
 }
@@ -149,6 +135,9 @@ func (m *circuitMap) remove(key CircuitKey, dest *wire.OutPoint) (
 // pending returns number of circuits which are waiting for to be completed
 // (settle/cancel responses to be received)
 func (m *circuitMap) pending() int {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	length := 0
 	for _, circuits := range m.circuits {
 		length += len(circuits)

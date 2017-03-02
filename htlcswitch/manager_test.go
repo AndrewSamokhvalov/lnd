@@ -1,16 +1,41 @@
 package htlcswitch
 
 import (
+	"bytes"
+	"fmt"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
+	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
 	"reflect"
 	"testing"
 	"time"
 )
+
+type MessageIntercepter func(m lnwire.Message) lnwire.Message
+
+// createLogFunc returns the function which will be
+// used for logging message are received from another peer.
+func createLogFunc(name string, channelPoint *wire.OutPoint) func(lnwire.Message) {
+	return func(m lnwire.Message) {
+		if getChannelPoint(m) == channelPoint {
+			// Skip logging of extend revocation window messages.
+			switch m := m.(type) {
+			case *lnwire.CommitRevocation:
+				var zeroHash chainhash.Hash
+				if bytes.Equal(zeroHash[:], m.Revocation[:]) {
+					return
+				}
+			}
+
+			fmt.Printf("---------------------- \n %v received: " +
+				"%v", name, lnwire.MessageToStringClosure(m))
+		}
+	}
+}
 
 // TestSingleHopPayment in this test we checks the interaction between Alice and
 // Bob within scope of one channel.
@@ -23,6 +48,17 @@ func TestSingleHopPayment(t *testing.T) {
 
 	bobBandwidthBefore := c.firstBobHtlcManager.Bandwidth()
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
+
+	debug := false
+	if debug {
+		// Log message that alice receives.
+		c.aliceServer.Record(createLogFunc("alice",
+			c.aliceHtlcManager.ID()))
+
+		// Log message that bob receives.
+		c.bobServer.Record(createLogFunc("bob",
+			c.firstBobHtlcManager.ID()))
+	}
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
 	paymentErrorChan, invoice, err := c.MakeBobToAlicePayment(amount)
@@ -77,6 +113,25 @@ func TestMultiHopPayment(t *testing.T) {
 	firstBobBandwidthBefore := c.firstBobHtlcManager.Bandwidth()
 	secondBobBandwidthBefore := c.secondBobHtlcManager.Bandwidth()
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
+
+	debug := false
+	if debug {
+		// Log messages that alice receives from bob.
+		c.aliceServer.Record(createLogFunc("[alice]<-bob<-carol: ",
+			c.aliceHtlcManager.ID()))
+
+		// Log messages that bob receives from alice.
+		c.bobServer.Record(createLogFunc("alice->[bob]->carol: ",
+			c.firstBobHtlcManager.ID()))
+
+		// Log messages that bob receives from carol.
+		c.bobServer.Record(createLogFunc("alice<-[bob]<-carol: ",
+			c.secondBobHtlcManager.ID()))
+
+		// Log messages that carol receives from bob.
+		c.carolServer.Record(createLogFunc("alice->bob->[carol]",
+			c.carolHtlcManager.ID()))
+	}
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
 	paymentErrorChan, invoice, err := c.MakeCarolToAlicePayment(amount,
@@ -436,18 +491,21 @@ func TestSingleHopMessageOrdering(t *testing.T) {
 	c.aliceServer.Record(func(m lnwire.Message) {
 		if getChannelPoint(m) == chanPoint {
 			if reflect.TypeOf(aliceOrder[0]) != reflect.TypeOf(m) {
-				t.Fatalf("wrong message: %v", lnwire.MessageToStringClosure(m))
+				t.Fatalf("alice received wrong message: \n"+
+					"real: %v\n expected: %v", lnwire.MessageToStringClosure(m),
+					lnwire.MessageToStringClosure(aliceOrder[0]))
 			}
 			aliceOrder = aliceOrder[1:]
 		}
-
 	})
 
 	// Check that bob receives messages in right order.
 	c.bobServer.Record(func(m lnwire.Message) {
 		if getChannelPoint(m) == chanPoint {
 			if reflect.TypeOf(bobOrder[0]) != reflect.TypeOf(m) {
-				t.Fatalf("wrong message: %v", lnwire.MessageToStringClosure(m))
+				t.Fatalf("bob received wrong message: \n"+
+					"real: %v\n expected: %v", lnwire.MessageToStringClosure(m),
+					lnwire.MessageToStringClosure(bobOrder[0]))
 			}
 			bobOrder = bobOrder[1:]
 		}
