@@ -70,7 +70,7 @@ func (r *SwitchRequest) Error() chan error {
 // NewUserAddRequest creates new switch request with UserAddRequest type, for
 // more information look at UserAddRequest comments.
 func NewUserAddRequest(dest *routing.HopID,
-	htlc *lnwire.HTLCAddRequest) *SwitchRequest {
+	htlc *lnwire.UpdateAddHTLC) *SwitchRequest {
 	return &SwitchRequest{
 		Type: UserAddRequest,
 		Dest: dest,
@@ -83,7 +83,7 @@ func NewUserAddRequest(dest *routing.HopID,
 // for more information look at ForwardAddRequest type comments.
 // NOTE: the name "source" is considered in terms of htlc switch circuit.
 func NewForwardAddRequest(dest *routing.HopID, source *wire.OutPoint,
-	htlc *lnwire.HTLCAddRequest) *SwitchRequest {
+	htlc *lnwire.UpdateAddHTLC) *SwitchRequest {
 	return &SwitchRequest{
 		Type:         ForwardAddRequest,
 		Dest:         dest,
@@ -96,7 +96,7 @@ func NewForwardAddRequest(dest *routing.HopID, source *wire.OutPoint,
 // type, for more information look at ForwardSettleRequest type comments.
 // NOTE: the name "source" is considered from htlc switch POV.
 func NewForwardSettleRequest(destination *wire.OutPoint,
-	htlc *lnwire.HTLCSettleRequest) *SwitchRequest {
+	htlc *lnwire.UpdateFufillHTLC) *SwitchRequest {
 	return &SwitchRequest{
 		Type:         ForwardSettleRequest,
 		ChannelPoint: destination,
@@ -107,7 +107,7 @@ func NewForwardSettleRequest(destination *wire.OutPoint,
 // NewCancelRequest creates new switch request with CancelRequest type, for more
 // information look at CancelRequest type comments.
 // NOTE: the name "destination" is considered from htlc switch POV.
-func NewCancelRequest(destination *wire.OutPoint, htlc *lnwire.CancelHTLC,
+func NewCancelRequest(destination *wire.OutPoint, htlc *lnwire.UpdateFailHTLC,
 	payHash [32]byte) *SwitchRequest {
 	return &SwitchRequest{
 		Type:         CancelRequest,

@@ -1565,29 +1565,33 @@ func (lc *LightningChannel) ReceiveNewCommitment(rawSig []byte) error {
 	return nil
 }
 
-// NumUnAcked returns the number of unacked changes we've sent. A change is
-// acked once we receive a new update to our local chain from the remote peer.
-func (lc *LightningChannel) NumUnAcked() int {
+// IsUnacked returns true if we send new commitment and not received an
+// response.
+func (lc *LightningChannel) IsUnacked() bool {
 	diff := lc.remoteCommitChain.commitments.Len() -
 		lc.localCommitChain.commitments.Len()
 
 	if diff > 0 {
-		return diff
+		return true
 	} else {
-		return 0
+		return false
 	}
 }
 
-//// NeedUpdate returns a boolean value reflecting if there are any pending
-//// updates which need to be committed. The commitment transaction should
-//// be updated if we have htlcs which are not committed in remote chain.
-//func (lc *LightningChannel) NeedUpdate() bool {
-//	lc.RLock()
-//	defer lc.RUnlock()
-//
-//	return	lc.remoteCommitChain.tip().ourMessageIndex != lc. ||
-//		lc.remoteCommitChain.tip().theirMessageIndex != lc.theirLogCounter
-//}
+// NeedUpdate returns a boolean value reflecting if there are any pending
+// updates which need to be committed. The commitment transaction should
+// be updated if we have htlcs which are not committed in remote chain.
+func (lc *LightningChannel) NeedUpdate() bool {
+	lc.RLock()
+	defer lc.RUnlock()
+
+	c1 := lc.remoteCommitChain.tip().ourMessageIndex !=
+		lc.localUpdateLog.logIndex
+	c2 := lc.remoteCommitChain.tip().theirMessageIndex !=
+		lc.remoteUpdateLog.logIndex
+
+	return c1 || c2
+}
 
 // FullySynced is used to ensures that we receive the commitment transaction
 // back from remote side, and that the updates that we generated are included

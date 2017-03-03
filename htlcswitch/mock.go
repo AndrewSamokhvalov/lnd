@@ -93,18 +93,18 @@ func (s *MockServer) SendMessage(message lnwire.Message) error {
 }
 
 func (s *MockServer) readHandler(message lnwire.Message) error {
-	var targetChan *wire.OutPoint
+	var targetChan wire.OutPoint
 
 	switch msg := message.(type) {
-	case *lnwire.HTLCAddRequest:
+	case *lnwire.UpdateAddHTLC:
 		targetChan = msg.ChannelPoint
-	case *lnwire.HTLCSettleRequest:
+	case *lnwire.UpdateFufillHTLC:
 		targetChan = msg.ChannelPoint
-	case *lnwire.CommitRevocation:
+	case *lnwire.UpdateFailHTLC:
 		targetChan = msg.ChannelPoint
-	case *lnwire.CommitSignature:
+	case *lnwire.RevokeAndAck:
 		targetChan = msg.ChannelPoint
-	case *lnwire.CancelHTLC:
+	case *lnwire.CommitSig:
 		targetChan = msg.ChannelPoint
 	default:
 		return errors.New("unknown message type")
@@ -112,7 +112,7 @@ func (s *MockServer) readHandler(message lnwire.Message) error {
 
 	// Dispatch the commitment update message to the proper
 	// htc manager dedicated to this channel.
-	manager, err := s.htlcSwitch.Get(*targetChan)
+	manager, err := s.htlcSwitch.Get(targetChan)
 	if err != nil {
 		return err
 	}
@@ -208,8 +208,9 @@ var _ routing.HopIterator = (*MockHopIterator)(nil)
 // decodes the encoded array of hops.
 type MockIteratorDecoder struct{}
 
-func (p *MockIteratorDecoder) Decode(data []byte, meta []byte) (routing.HopIterator, error) {
-	buf := bytes.NewBuffer(data)
+func (p *MockIteratorDecoder) Decode(data [lnwire.OnionPacketSize]byte,
+	meta []byte) (routing.HopIterator, error) {
+	buf := bytes.NewBuffer(data[:])
 
 	var b [4]byte
 	_, err := buf.Read(b[:])

@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"encoding/binary"
+
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -295,23 +297,10 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 			return errors.Errorf("unable to accept new commitment: %v", err)
 		}
 
-		if mgr.channel.NumUnAcked() == 0 {
-			// If should not receive any additional commit
-			// sig message from remote side than, the order of
-			// messages should be strict.
-			if err := mgr.updateCommitTx(); err != nil {
-				mgr.cfg.Peer.Disconnect()
-				return errors.Errorf("can't update commit tx: "+
-					"%v", err)
-			}
-		} else {
-			// If we sign and send some number of commitment
-			// signature messages and didn't get the response from
-			// remote side, it means, that we should receive it in
-			// future, so the sending of commit and revocation
-			// messages are not interrelated in case of number of
-			// unacked message greater then zero.
-			mgr.delayedUpdateCommitTx()
+		if err := mgr.updateCommitTx(); err != nil {
+			mgr.cfg.Peer.Disconnect()
+			return errors.Errorf("can't update commit tx: "+
+				"%v", err)
 		}
 
 		// Finally, since we just accepted a new state, send the remote
@@ -580,12 +569,17 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 				continue
 			}
 			delete(mgr.notSettleHTLCs, pd.ParentIndex)
-			reason := mgr.cancelReasons[pd.ParentIndex]
+			opaqueReason := mgr.cancelReasons[pd.ParentIndex]
 
 			switch request.Type {
 			case UserAddRequest:
+				// TODO(andrew.shvv) Finish when opaque
+				// reason become more clear.
+				code := binary.BigEndian.Uint16(opaqueReason)
+				failCode := lnwire.FailCode(code)
+
 				// Notify user that his payment was canceled.
-				request.Error() <- errors.New(reason.String())
+				request.Error() <- errors.New(failCode.String())
 
 			case ForwardAddRequest:
 				// If this request came from switch that we
@@ -594,7 +588,7 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 					NewCancelRequest(
 						mgr.ID(),
 						&lnwire.UpdateFailHTLC{
-							Reason:       reason,
+							Reason:       opaqueReason,
 							ChannelPoint: *mgr.ID(),
 							ID:           pd.Index,
 						},
@@ -620,7 +614,7 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 				// If we're unable to parse the Sphinx packet,
 				// then we'll cancel the HTLC.
 				log.Errorf("unable to get the next hop: %v", err)
-				mgr.sendHTLCError(pd.RHash, lnwire.SphinxParseError)
+				mgr.sendHTLCError(pd.RHash, []byte{byte(lnwire.SphinxParseError)})
 				continue
 			}
 
@@ -655,7 +649,8 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 				if err != nil {
 					log.Errorf("unable to query to locate:"+
 						" %v", err)
-					mgr.sendHTLCError(pd.RHash, lnwire.UnknownPaymentHash)
+					reason := []byte{byte(lnwire.UnknownPaymentHash)}
+					mgr.sendHTLCError(pd.RHash, reason)
 					continue
 				}
 
@@ -668,7 +663,8 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 					log.Errorf("rejecting HTLC due to incorrect "+
 						"amount: expected %v, received %v",
 						invoice.Terms.Value, pd.Amount)
-					mgr.sendHTLCError(pd.RHash, lnwire.IncorrectValue)
+					reason := []byte{byte(lnwire.IncorrectValue)}
+					mgr.sendHTLCError(pd.RHash, reason)
 					continue
 				}
 
@@ -705,7 +701,7 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 // sendHTLCError functions cancels HTLC and send cancel message back to the
 // peer from which HTLC was received.
 func (mgr *htlcManager) sendHTLCError(rHash [32]byte,
-	reason lnwire.FailCode) {
+	reason lnwire.OpaqueReason) {
 
 	index, err := mgr.channel.FailHTLC(rHash)
 	if err != nil {
@@ -716,7 +712,7 @@ func (mgr *htlcManager) sendHTLCError(rHash [32]byte,
 	mgr.cfg.Peer.SendMessage(&lnwire.UpdateFailHTLC{
 		ChannelPoint: *mgr.ID(),
 		ID:           index,
-		Reason:       []byte{byte(reason)},
+		Reason:       reason,
 	})
 }
 
@@ -803,7 +799,7 @@ func (mgr *htlcManager) delayedUpdateCommitTx() {
 // latest updates we've received+processed up to this point.
 func (mgr *htlcManager) updateCommitTx() error {
 	if mgr.channel.NeedUpdate() || !mgr.channel.FullySynced() {
-		sigTheirs, logIndexTheirs, err := mgr.channel.SignNextCommitment()
+		sigTheirs, err := mgr.channel.SignNextCommitment()
 		if err == lnwallet.ErrNoWindow {
 			log.Trace(err)
 			return nil
@@ -816,10 +812,9 @@ func (mgr *htlcManager) updateCommitTx() error {
 			return errors.Errorf("unable to update commitment: %v", err)
 		}
 
-		commitSig := &lnwire.CommitSignature{
-			ChannelPoint: mgr.ID(),
+		commitSig := &lnwire.CommitSig{
+			ChannelPoint: *mgr.ID(),
 			CommitSig:    parsedSig,
-			LogIndex:     uint64(logIndexTheirs),
 		}
 
 		if err := mgr.cfg.Peer.SendMessage(commitSig); err != nil {

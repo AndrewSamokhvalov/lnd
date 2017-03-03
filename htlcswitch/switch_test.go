@@ -43,8 +43,8 @@ func TestHtlcSwitchForward(t *testing.T) {
 	request = NewForwardAddRequest(
 		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
-		&lnwire.HTLCAddRequest{
-			RedemptionHashes: [][sha256.Size]byte{rhash},
+		&lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
 		},
 	)
 
@@ -69,8 +69,8 @@ func TestHtlcSwitchForward(t *testing.T) {
 	// request should be forwarder back to alice htlc manager.
 	request = NewForwardSettleRequest(
 		bobHtlcManager.ID(),
-		&lnwire.HTLCSettleRequest{
-			RedemptionProofs: [][sha256.Size]byte{preimage},
+		&lnwire.UpdateFufillHTLC{
+			PaymentPreimage: preimage,
 		},
 	)
 
@@ -114,8 +114,8 @@ func TestHtlcSwitchCancel(t *testing.T) {
 	request = NewForwardAddRequest(
 		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
-		&lnwire.HTLCAddRequest{
-			RedemptionHashes: [][sha256.Size]byte{rhash},
+		&lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
 		},
 	)
 
@@ -140,7 +140,7 @@ func TestHtlcSwitchCancel(t *testing.T) {
 	// request should be forwarder back to alice htlc manager.
 	request = NewCancelRequest(
 		bobHtlcManager.ID(),
-		&lnwire.CancelHTLC{},
+		&lnwire.UpdateFailHTLC{},
 		rhash,
 	)
 
@@ -184,8 +184,8 @@ func TestAddSamePayment(t *testing.T) {
 	request = NewForwardAddRequest(
 		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
-		&lnwire.HTLCAddRequest{
-			RedemptionHashes: [][sha256.Size]byte{rhash},
+		&lnwire.UpdateAddHTLC{
+			PaymentHash: rhash,
 		},
 	)
 
@@ -219,7 +219,7 @@ func TestAddSamePayment(t *testing.T) {
 	// request should be forwarder back to alice htlc manager.
 	request = NewCancelRequest(
 		bobHtlcManager.ID(),
-		&lnwire.CancelHTLC{},
+		&lnwire.UpdateFailHTLC{},
 		rhash,
 	)
 

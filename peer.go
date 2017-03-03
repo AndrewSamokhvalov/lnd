@@ -4,17 +4,16 @@ import (
 	"container/list"
 	"crypto/rand"
 	"encoding/binary"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"crypto/sha256"
+
 	"github.com/btcsuite/fastsha256"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
-	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -484,7 +483,7 @@ out:
 			p.server.fundingMgr.waitUntilChannelOpen(targetChan)
 			// Dispatch the commitment update message to the proper
 			// active goroutine dedicated to this channel.
-			manager, err := p.server.htlcSwitch.Get(*targetChan)
+			manager, err := p.server.htlcSwitch.Get(targetChan)
 			if err != nil {
 				peerLog.Warn(err)
 				continue
@@ -711,7 +710,7 @@ out:
 					DebugHTLC:        cfg.DebugHTLC,
 					Registry:         p.server.invoices,
 					Forward:          p.server.htlcSwitch.Forward,
-				}, newChan)
+				}, newChanReq.channel)
 
 			err := p.server.htlcSwitch.Add(manager)
 			if err != nil {

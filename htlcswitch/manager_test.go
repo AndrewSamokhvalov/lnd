@@ -3,6 +3,10 @@ package htlcswitch
 import (
 	"bytes"
 	"fmt"
+	"reflect"
+	"testing"
+	"time"
+
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -10,28 +14,25 @@ import (
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
-	"reflect"
-	"testing"
-	"time"
 )
 
 type MessageIntercepter func(m lnwire.Message) lnwire.Message
 
 // createLogFunc returns the function which will be
 // used for logging message are received from another peer.
-func createLogFunc(name string, channelPoint *wire.OutPoint) func(lnwire.Message) {
+func createLogFunc(name string, channelPoint wire.OutPoint) func(lnwire.Message) {
 	return func(m lnwire.Message) {
 		if getChannelPoint(m) == channelPoint {
 			// Skip logging of extend revocation window messages.
 			switch m := m.(type) {
-			case *lnwire.CommitRevocation:
+			case *lnwire.RevokeAndAck:
 				var zeroHash chainhash.Hash
 				if bytes.Equal(zeroHash[:], m.Revocation[:]) {
 					return
 				}
 			}
 
-			fmt.Printf("---------------------- \n %v received: " +
+			fmt.Printf("---------------------- \n %v received: "+
 				"%v", name, lnwire.MessageToStringClosure(m))
 		}
 	}
@@ -53,11 +54,11 @@ func TestSingleHopPayment(t *testing.T) {
 	if debug {
 		// Log message that alice receives.
 		c.aliceServer.Record(createLogFunc("alice",
-			c.aliceHtlcManager.ID()))
+			*c.aliceHtlcManager.ID()))
 
 		// Log message that bob receives.
 		c.bobServer.Record(createLogFunc("bob",
-			c.firstBobHtlcManager.ID()))
+			*c.firstBobHtlcManager.ID()))
 	}
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
@@ -118,19 +119,19 @@ func TestMultiHopPayment(t *testing.T) {
 	if debug {
 		// Log messages that alice receives from bob.
 		c.aliceServer.Record(createLogFunc("[alice]<-bob<-carol: ",
-			c.aliceHtlcManager.ID()))
+			*c.aliceHtlcManager.ID()))
 
 		// Log messages that bob receives from alice.
 		c.bobServer.Record(createLogFunc("alice->[bob]->carol: ",
-			c.firstBobHtlcManager.ID()))
+			*c.firstBobHtlcManager.ID()))
 
 		// Log messages that bob receives from carol.
 		c.bobServer.Record(createLogFunc("alice<-[bob]<-carol: ",
-			c.secondBobHtlcManager.ID()))
+			*c.secondBobHtlcManager.ID()))
 
 		// Log messages that carol receives from bob.
 		c.carolServer.Record(createLogFunc("alice->bob->[carol]",
-			c.carolHtlcManager.ID()))
+			*c.carolHtlcManager.ID()))
 	}
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
@@ -379,7 +380,8 @@ func TestMultiHopDecodeError(t *testing.T) {
 	defer c.StopCluster()
 
 	// Replace decode function with another which throws an error.
-	c.aliceHtlcManager.cfg.DecodeOnion = func(data []byte, meta []byte) (
+	c.aliceHtlcManager.cfg.DecodeOnion = func(data [lnwire.OnionPacketSize]byte,
+		meta []byte) (
 		routing.HopIterator, error) {
 		return nil, errors.New("some sphinx decode error!")
 	}
@@ -433,21 +435,22 @@ func TestMultiHopDecodeError(t *testing.T) {
 	}
 }
 
-func getChannelPoint(msg lnwire.Message) *wire.OutPoint {
+func getChannelPoint(msg lnwire.Message) wire.OutPoint {
+	var point wire.OutPoint
 	switch msg := msg.(type) {
-	case *lnwire.HTLCAddRequest:
-		return msg.ChannelPoint
-	case *lnwire.HTLCSettleRequest:
-		return msg.ChannelPoint
-	case *lnwire.CancelHTLC:
-		return msg.ChannelPoint
-	case *lnwire.CommitRevocation:
-		return msg.ChannelPoint
-	case *lnwire.CommitSignature:
-		return msg.ChannelPoint
-	default:
-		return nil
+	case *lnwire.UpdateAddHTLC:
+		point = msg.ChannelPoint
+	case *lnwire.UpdateFufillHTLC:
+		point = msg.ChannelPoint
+	case *lnwire.UpdateFailHTLC:
+		point = msg.ChannelPoint
+	case *lnwire.RevokeAndAck:
+		point = msg.ChannelPoint
+	case *lnwire.CommitSig:
+		point = msg.ChannelPoint
 	}
+
+	return point
 }
 
 // TestSingleHopMessageOrdering test checks ordering of message which flying
@@ -455,36 +458,36 @@ func getChannelPoint(msg lnwire.Message) *wire.OutPoint {
 func TestSingleHopMessageOrdering(t *testing.T) {
 	c := CreateCluster(t)
 
-	chanPoint := c.aliceHtlcManager.ID()
+	chanPoint := *c.aliceHtlcManager.ID()
 
 	// Append initial channel window revocation messages which occurs after
 	// channel opening.
 	var aliceOrder []lnwire.Message
 	for i := 0; i < lnwallet.InitialRevocationWindow; i++ {
-		aliceOrder = append(aliceOrder, &lnwire.CommitRevocation{})
+		aliceOrder = append(aliceOrder, &lnwire.RevokeAndAck{})
 	}
 
 	aliceOrder = append(aliceOrder, []lnwire.Message{
-		&lnwire.HTLCAddRequest{},
-		&lnwire.CommitSignature{},
-		&lnwire.CommitRevocation{},
-		&lnwire.CommitSignature{},
-		&lnwire.CommitRevocation{},
+		&lnwire.UpdateAddHTLC{},
+		&lnwire.CommitSig{},
+		&lnwire.RevokeAndAck{},
+		&lnwire.CommitSig{},
+		&lnwire.RevokeAndAck{},
 	}...)
 
 	// Append initial channel window revocation messages which occurs after
 	// channel channel opening.
 	var bobOrder []lnwire.Message
 	for i := 0; i < lnwallet.InitialRevocationWindow; i++ {
-		bobOrder = append(bobOrder, &lnwire.CommitRevocation{})
+		bobOrder = append(bobOrder, &lnwire.RevokeAndAck{})
 	}
 
 	bobOrder = append(bobOrder, []lnwire.Message{
-		&lnwire.CommitSignature{},
-		&lnwire.CommitRevocation{},
-		&lnwire.HTLCSettleRequest{},
-		&lnwire.CommitSignature{},
-		&lnwire.CommitRevocation{},
+		&lnwire.CommitSig{},
+		&lnwire.RevokeAndAck{},
+		&lnwire.UpdateFufillHTLC{},
+		&lnwire.CommitSig{},
+		&lnwire.RevokeAndAck{},
 	}...)
 
 	// Check that alice receives messages in right order.

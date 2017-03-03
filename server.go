@@ -24,7 +24,6 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/routing"
 )
 
 // server is the main server of the Lightning Network Daemon. The server houses
@@ -184,12 +183,10 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 			htlcAdd *lnwire.UpdateAddHTLC) ([32]byte, error) {
 
 			firstHopPub := firstHop.SerializeCompressed()
-			destInterface := chainhash.Hash(fastsha256.Sum256(firstHopPub))
+			destination := routing.NewHopID(firstHopPub)
 
-			return s.htlcSwitch.SendHTLC(&htlcPacket{
-				dest: destInterface,
-				msg:  htlcAdd,
-			})
+			return s.htlcSwitch.Forward(htlcswitch.NewUserAddRequest(
+				destination, htlcAdd))
 		},
 	})
 	if err != nil {

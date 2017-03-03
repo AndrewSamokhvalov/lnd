@@ -2,6 +2,10 @@ package htlcswitch
 
 import (
 	"encoding/hex"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -9,9 +13,6 @@ import (
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 var (
@@ -116,7 +117,7 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 	// User sent us new payment request, therefore we trying to find the
 	// HTLC appropriate manager in terms of destination and bandwidth.
 	case UserAddRequest:
-		htlc := request.Htlc.(*lnwire.HTLCAddRequest)
+		htlc := request.Htlc.(*lnwire.UpdateAddHTLC)
 
 		managers, err := s.getManagersByDest(request.Dest)
 		if err != nil {
@@ -146,7 +147,7 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 	// payment circuit within our internal state so we can properly forward
 	// the ultimate settle message back latter.
 	case ForwardAddRequest:
-		htlc := request.Htlc.(*lnwire.HTLCAddRequest)
+		htlc := request.Htlc.(*lnwire.UpdateAddHTLC)
 
 		source, err := s.Get(*request.ChannelPoint)
 		if err != nil {
@@ -159,12 +160,14 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		if err != nil {
 			log.Errorf("unable to find managers with "+
 				"destination %v", err)
+
+			reason := []byte{byte(lnwire.UnknownDestination)}
 			source.HandleRequest(NewCancelRequest(
 				request.ChannelPoint,
-				&lnwire.CancelHTLC{
-					Reason: lnwire.UnknownDestination,
+				&lnwire.UpdateFailHTLC{
+					Reason: reason,
 				},
-				htlc.RedemptionHashes[0],
+				htlc.PaymentHash,
 			))
 			return
 		}
@@ -184,12 +187,14 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		if destination == nil {
 			log.Errorf("unable to forward HTLC channels has "+
 				"insufficient capacity, need %v", htlc.Amount)
+
+			reason := []byte{byte(lnwire.InsufficientCapacity)}
 			source.HandleRequest(NewCancelRequest(
 				request.ChannelPoint,
-				&lnwire.CancelHTLC{
-					Reason: lnwire.InsufficientCapacity,
+				&lnwire.UpdateFailHTLC{
+					Reason: reason,
 				},
-				htlc.RedemptionHashes[0],
+				htlc.PaymentHash,
 			))
 			return
 		}
@@ -197,7 +202,7 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		err = s.circuits.add(newPaymentCircuit(
 			*source.ID(),
 			*destination.ID(),
-			htlc.RedemptionHashes[0],
+			htlc.PaymentHash,
 		))
 		if err != nil {
 			command.err <- errors.Errorf("unable to add circuit: "+
@@ -214,8 +219,8 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 	// payment circuit by forwarding the settle msg to the channel from
 	// which HTLC add request was initially received.
 	case ForwardSettleRequest:
-		htlc := request.Htlc.(*lnwire.HTLCSettleRequest)
-		rHash := fastsha256.Sum256(htlc.RedemptionProofs[0][:])
+		htlc := request.Htlc.(*lnwire.UpdateFufillHTLC)
+		rHash := fastsha256.Sum256(htlc.PaymentPreimage[:])
 
 		// Exit if we can't find and remove the active circuit to
 		// continue propagating the cancel over.

@@ -3,11 +3,13 @@ package routing
 import (
 	"bytes"
 	"encoding/hex"
+
 	"github.com/btcsuite/golangcrypto/ripemd160"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lightning-onion"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcutil"
+	"github.com/lightningnetwork/lnd/lnwire"
 )
 
 // HopID represents the id which is used by propagation subsystem in order to
@@ -139,10 +141,11 @@ func NewSphinxDecoder(router *sphinx.Router) *SphinxDecoder {
 }
 
 // Decode...
-func (p *SphinxDecoder) Decode(data []byte, rHash []byte) (HopIterator, error) {
+func (p *SphinxDecoder) Decode(data [lnwire.OnionPacketSize]byte,
+	rHash []byte) (HopIterator, error) {
 	// Before adding the new HTLC to the state machine, parse the
 	// onion object in order to obtain the routing information.
-	blobReader := bytes.NewReader(data)
+	blobReader := bytes.NewReader(data[:])
 	onionPkt := &sphinx.OnionPacket{}
 	if err := onionPkt.Decode(blobReader); err != nil {
 		return nil, errors.Errorf("unable to decode onion pkt: %v", err)
