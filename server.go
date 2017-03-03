@@ -18,7 +18,6 @@ import (
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/roasbeef/btcd/btcec"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/connmgr"
 	"github.com/roasbeef/btcutil"
 
@@ -56,7 +55,7 @@ type server struct {
 	fundingMgr *fundingManager
 	chanDB     *channeldb.DB
 
-	htlcSwitch    *htlcswitch.HTLCSwitch
+	htlcSwitch    *htlcswitch.Switch
 	invoices      *invoiceRegistry
 	breachArbiter *breachArbiter
 
@@ -185,15 +184,21 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 			firstHopPub := firstHop.SerializeCompressed()
 			destination := routing.NewHopID(firstHopPub)
 
-			return s.htlcSwitch.Forward(htlcswitch.NewUserAddRequest(
-				destination, htlcAdd))
+			// If ew receive an error on this stage than
+			response, err := s.htlcSwitch.SendPayment(destination, htlcAdd)
+			if err != nil {
+				var zeroBytes [32]byte
+				return zeroBytes, err
+			}
+
+			return <-response.Preimage, <-response.Err
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	s.htlcSwitch = htlcswitch.NewHTLCSwitch()
+	s.htlcSwitch = htlcswitch.New()
 	s.rpcServer = newRPCServer(s)
 	s.breachArbiter = newBreachArbiter(wallet, chanDB, notifier, s.htlcSwitch)
 

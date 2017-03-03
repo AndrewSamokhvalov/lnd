@@ -27,7 +27,7 @@ type breachArbiter struct {
 	wallet     *lnwallet.LightningWallet
 	db         *channeldb.DB
 	notifier   chainntnfs.ChainNotifier
-	htlcSwitch *htlcswitch.HTLCSwitch
+	htlcSwitch *htlcswitch.Switch
 
 	// breachObservers is a map which tracks all the active breach
 	// observers we're currently managing. The key of the map is the
@@ -64,7 +64,7 @@ type breachArbiter struct {
 // its dependent objects.
 func newBreachArbiter(wallet *lnwallet.LightningWallet, db *channeldb.DB,
 	notifier chainntnfs.ChainNotifier,
-	htlcSwitch *htlcswitch.HTLCSwitch) *breachArbiter {
+	htlcSwitch *htlcswitch.Switch) *breachArbiter {
 
 	return &breachArbiter{
 		wallet:            wallet,

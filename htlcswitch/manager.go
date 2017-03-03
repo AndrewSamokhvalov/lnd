@@ -69,7 +69,7 @@ const (
 type HTLCManager interface {
 	// HandleRequest handles the switch requests which forwarded to us
 	// from another peer.
-	HandleRequest(*SwitchRequest) error
+	HandleRequest(*request) error
 
 	// HandleMessage handles the htlc requests which sent to us from remote
 	// peer.
@@ -104,16 +104,16 @@ type HTLCManager interface {
 }
 
 // handleMessageCommand encapsulates peer HTLC message and adds error channel to
-// receive response from message handler.
+// receive Err from message handler.
 type handleMessageCommand struct {
 	message lnwire.Message
 	err     chan error
 }
 
 // forwardRequest encapsulates switch request and adds error channel to
-// receive response from request handler.
+// receive Err from request handler.
 type requestForward struct {
-	req *SwitchRequest
+	req *request
 	err chan error
 }
 
@@ -128,9 +128,9 @@ type HTLCManagerConfig struct {
 	DecodeOnion func(data [lnwire.OnionPacketSize]byte, meta []byte) (
 		routing.HopIterator, error)
 
-	// Forward is a function which is used to forward the incoming HTLC
+	// Forward is a function which is used to Forward the incoming HTLC
 	// requests to other peer which should handle it.
-	Forward func(*SwitchRequest) error
+	Forward func(*request) error
 
 	// Peer is a lightning network node with which we have create managed
 	// channel.
@@ -152,9 +152,9 @@ type HTLCManagerConfig struct {
 }
 
 // htlcManager is the service which drives a channel's commitment update
-// state-machine in response to messages received from remote peer or
+// state-machine in Err to messages received from remote peer or
 // forwarded to as from HTLC switch. In the event that an HTLC needs to be
-// forwarded, then forward handler is used which sends HTLC to the switch for
+// forwarded, then Forward handler is used which sends HTLC to the switch for
 // forwarding. Additionally, the htlcManager encapsulate logic of commitment
 // protocol message ordering and updates.
 type htlcManager struct {
@@ -169,7 +169,7 @@ type htlcManager struct {
 
 	// notSettleHTLCs is a map of outgoing HTLC's we've committed to in
 	// our chain which have not yet been settled by the peer.
-	notSettleHTLCs map[uint64]*SwitchRequest
+	notSettleHTLCs map[uint64]*request
 
 	// cancelReasons stores the reason why a particular HTLC was cancelled.
 	// The index of the HTLC within the log is mapped to the cancellation
@@ -210,7 +210,7 @@ func NewHTLCManager(cfg *HTLCManagerConfig,
 	return &htlcManager{
 		cfg:                 cfg,
 		channel:             channel,
-		notSettleHTLCs:      make(map[uint64]*SwitchRequest),
+		notSettleHTLCs:      make(map[uint64]*request),
 		blobs:               make(map[uint64][lnwire.OnionPacketSize]byte),
 		commands:            make(chan interface{}),
 		cancelReasons:       make(map[uint64]lnwire.OpaqueReason),
@@ -315,7 +315,7 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 
 	case *lnwire.RevokeAndAck:
 		// We've received a revocation from the remote chain, if valid,
-		// this moves the remote chain forward, and expands our
+		// this moves the remote chain Forward, and expands our
 		// revocation window.
 		htlcs, err := mgr.channel.ReceiveRevocation(msg)
 		if err != nil {
@@ -337,7 +337,7 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 			for _, request := range requestsToForward {
 				err := mgr.cfg.Forward(request)
 				if err != nil {
-					log.Errorf("error while forward htlc "+
+					log.Errorf("error while Forward htlc "+
 						"over htlc switch: %v", err)
 				}
 			}
@@ -353,7 +353,7 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 
 // HandleMessage handles the HTLC requests which sent to us from remote peer.
 // NOTE: Part of the HTLCManager interface.
-func (mgr *htlcManager) HandleRequest(request *SwitchRequest) error {
+func (mgr *htlcManager) HandleRequest(request *request) error {
 	command := &requestForward{
 		req: request,
 		err: make(chan error),
@@ -375,8 +375,8 @@ func (mgr *htlcManager) HandleRequest(request *SwitchRequest) error {
 
 // handleRequest handles HTLC switch requests which was forwarded to us from
 // another channel, or sent to us from user who wants to send the payment.
-func (mgr *htlcManager) handleRequest(request *SwitchRequest) error {
-	switch htlc := request.Htlc.(type) {
+func (mgr *htlcManager) handleRequest(request *request) error {
+	switch htlc := request.htlc.(type) {
 	case *lnwire.UpdateAddHTLC:
 		// A new payment has been initiated, so we add the new HTLC
 		// to our local log and the send it remote peer.
@@ -413,7 +413,7 @@ func (mgr *htlcManager) handleRequest(request *SwitchRequest) error {
 		// HTLC switch notified us that HTLC which we forwarded was
 		// canceled, so we need to propagate this htlc to remote
 		// peer.
-		mgr.sendHTLCError(request.PayHash, htlc.Reason)
+		mgr.sendHTLCError(request.payHash, htlc.Reason)
 	}
 
 	return nil
@@ -485,7 +485,7 @@ func (mgr *htlcManager) startHandle() {
 		select {
 		case <-mgr.channel.UnilateralCloseSignal:
 			// TODO(roasbeef): need to send HTLC outputs to nursery
-			log.Warnf("Remote peer has closed ChannelPoint(%v) "+
+			log.Warnf("Remote peer has closed channelPoint(%v) "+
 				"on-chain",
 				mgr.ID())
 			if err := mgr.cfg.Peer.WipeChannel(mgr.channel); err !=
@@ -497,7 +497,7 @@ func (mgr *htlcManager) startHandle() {
 			return
 
 		case <-mgr.channel.ForceCloseSignal:
-			log.Warnf("ChannelPoint(%v) has been force "+
+			log.Warnf("channelPoint(%v) has been force "+
 				"closed, disconnecting from peerID(%x)",
 				mgr.ID(), mgr.Peer().ID())
 			return
@@ -528,10 +528,10 @@ func (mgr *htlcManager) startHandle() {
 // which was designated as eligible for forwarding. But not all HTLC will be
 // forwarder, if HTLC reached its final destination that we should settle it.
 func (mgr *htlcManager) processHTLCsIncludedInBothChains(
-	paymentDescriptors []*lnwallet.PaymentDescriptor) ([]*SwitchRequest,
+	paymentDescriptors []*lnwallet.PaymentDescriptor) ([]*request,
 	error) {
 
-	var requestsToForward []*SwitchRequest
+	var requestsToForward []*request
 	for _, pd := range paymentDescriptors {
 		// TODO(roasbeef): rework log entries to a shared
 		// interface.
@@ -546,17 +546,18 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 			}
 			delete(mgr.notSettleHTLCs, pd.ParentIndex)
 
-			switch request.Type {
-			case UserAddRequest:
+			switch request.rType {
+			case userAddRequest:
 				// Notify user that his payment was
 				// successfully proceed.
-				request.Error() <- nil
+				request.response.Err <- nil
+				request.response.Preimage <- pd.RPreimage
 
-			case ForwardAddRequest:
+			case forwardAddRequest:
 				// If this request came from switch that we
-				// should forward settle message back to peer.
+				// should Forward settle message back to peer.
 				requestsToForward = append(requestsToForward,
-					NewForwardSettleRequest(
+					newForwardSettleRequest(
 						mgr.ID(),
 						&lnwire.UpdateFufillHTLC{
 							PaymentPreimage: pd.RPreimage,
@@ -571,21 +572,21 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 			delete(mgr.notSettleHTLCs, pd.ParentIndex)
 			opaqueReason := mgr.cancelReasons[pd.ParentIndex]
 
-			switch request.Type {
-			case UserAddRequest:
-				// TODO(andrew.shvv) Finish when opaque
-				// reason become more clear.
+			switch request.rType {
+			case userAddRequest:
+				// TODO(andrew.shvv) Finish when the usage of
+				// opaque reason become more clear.
 				code := binary.BigEndian.Uint16(opaqueReason)
 				failCode := lnwire.FailCode(code)
 
 				// Notify user that his payment was canceled.
-				request.Error() <- errors.New(failCode.String())
+				request.response.Err <- errors.New(failCode.String())
 
-			case ForwardAddRequest:
+			case forwardAddRequest:
 				// If this request came from switch that we
-				// should forward cancel message back to peer.
+				// should Forward cancel message back to peer.
 				requestsToForward = append(requestsToForward,
-					NewCancelRequest(
+					newFailRequest(
 						mgr.ID(),
 						&lnwire.UpdateFailHTLC{
 							Reason:       opaqueReason,
@@ -632,7 +633,7 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 				copy(blob[:], nextBlob)
 
 				requestsToForward = append(requestsToForward,
-					NewForwardAddRequest(
+					newForwardAddRequest(
 						dest, mgr.ID(),
 						&lnwire.UpdateAddHTLC{
 							Amount:      pd.Amount,

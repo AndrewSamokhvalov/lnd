@@ -49,8 +49,8 @@ type ChanClose struct {
 	Err     chan error
 }
 
-// HTLCSwitch is a central messaging bus for all incoming/outgoing HTLC's.
-// The goal of the switch is forward the incoming/outgoing HTLC messages from
+// Switch is a central messaging bus for all incoming/outgoing HTLC's.
+// The goal of the switch is Forward the incoming/outgoing HTLC messages from
 // one channel to another, and also propagate the settle HTLC messages back to
 // original requester. In order to better understand the whole view:
 //	alice			   bob				   carol
@@ -62,14 +62,14 @@ type ChanClose struct {
 //	|			 |        \			   |
 // alice htlc  <-channel->  first bob    second bob <-channel-> carol htlc
 // manager	    	  htlc manager   htlc manager		manager
-type HTLCSwitch struct {
+type Switch struct {
 	started  int32
 	shutdown int32
 	wg       sync.WaitGroup
 	quit     chan bool
 	mutex    sync.RWMutex
 
-	// circuits is an structure which is used to forward the settle HTLC
+	// circuits is an structure which is used to Forward the settle HTLC
 	// back to the add HTLC initiator.
 	circuits *circuitMap
 
@@ -81,9 +81,9 @@ type HTLCSwitch struct {
 	commands chan interface{}
 }
 
-// NewHTLCSwitch creates the HTLCSwitch instance.
-func NewHTLCSwitch() *HTLCSwitch {
-	return &HTLCSwitch{
+// New creates the Switch instance.
+func New() *Switch {
+	return &Switch{
 		circuits: newCircuitMap(),
 		managers: make(map[wire.OutPoint]HTLCManager),
 		commands: make(chan interface{}),
@@ -91,10 +91,22 @@ func NewHTLCSwitch() *HTLCSwitch {
 	}
 }
 
+// SendPayment...
+func (s *Switch) SendPayment(dest *routing.HopID, htlc *lnwire.UpdateAddHTLC)(
+	*Response, error) {
+
+	request := newUserAddRequest(dest, htlc)
+	if err := s.Forward(request); err != nil {
+		return nil, err
+	}
+
+	return request.response, nil
+}
+
 // Forward is used by HTLC managers to propagate the HTLC after it isn't
 // reached its final destination and eligible for forwarding. HTLC are
 // encapsulated in switch request in order to carry additional information.
-func (s *HTLCSwitch) Forward(request *SwitchRequest) error {
+func (s *Switch) Forward(request *request) error {
 	command := &requestForward{
 		req: request,
 		err: make(chan error),
@@ -104,22 +116,22 @@ func (s *HTLCSwitch) Forward(request *SwitchRequest) error {
 	case s.commands <- command:
 		return <-command.err
 	case <-s.quit:
-		return nil
+		return errors.New("switch was stopped")
 	}
 }
 
-// handleSwitchRequest handles incoming forward requests received from htlc
+// handleSwitchRequest handles incoming Forward requests received from htlc
 // managers.
-func (s *HTLCSwitch) handleForward(command *requestForward) {
+func (s *Switch) handleForward(command *requestForward) {
 	request := command.req
-	switch request.Type {
+	switch request.rType {
 
 	// User sent us new payment request, therefore we trying to find the
 	// HTLC appropriate manager in terms of destination and bandwidth.
-	case UserAddRequest:
-		htlc := request.Htlc.(*lnwire.UpdateAddHTLC)
+	case userAddRequest:
+		htlc := request.htlc.(*lnwire.UpdateAddHTLC)
 
-		managers, err := s.getManagersByDest(request.Dest)
+		managers, err := s.getManagersByDest(request.dest)
 		if err != nil {
 			command.err <- err
 			return
@@ -134,36 +146,36 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		}
 
 		if destination == nil {
-			request.Error() <- errors.New("unable to send payment, " +
-				"insufficient bandwidth")
+			request.response.Err <- errors.New("unable to " +
+				"send payment, insufficient bandwidth")
 			return
 		}
 
-		log.Debugf("Sending %v to %x", htlc.Amount, request.Dest.String())
+		log.Debugf("Sending %v to %x", htlc.Amount, request.dest.String())
 		command.err <- destination.HandleRequest(request)
 		return
 
 	// HTLC manager forwarded us a new HTLC, therefore we initiate the
-	// payment circuit within our internal state so we can properly forward
+	// payment circuit within our internal state so we can properly Forward
 	// the ultimate settle message back latter.
-	case ForwardAddRequest:
-		htlc := request.Htlc.(*lnwire.UpdateAddHTLC)
+	case forwardAddRequest:
+		htlc := request.htlc.(*lnwire.UpdateAddHTLC)
 
-		source, err := s.Get(*request.ChannelPoint)
+		source, err := s.Get(*request.channelPoint)
 		if err != nil {
 			command.err <- errors.Errorf("unable to find source htlc "+
 				"manager %v", err)
 			return
 		}
 
-		managers, err := s.getManagersByDest(request.Dest)
+		managers, err := s.getManagersByDest(request.dest)
 		if err != nil {
 			log.Errorf("unable to find managers with "+
 				"destination %v", err)
 
 			reason := []byte{byte(lnwire.UnknownDestination)}
-			source.HandleRequest(NewCancelRequest(
-				request.ChannelPoint,
+			source.HandleRequest(newFailRequest(
+				request.channelPoint,
 				&lnwire.UpdateFailHTLC{
 					Reason: reason,
 				},
@@ -180,17 +192,17 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 			}
 		}
 
-		// If the htlc manager we're attempting to forward the
+		// If the htlc manager we're attempting to Forward the
 		// HTLC over has insufficient capacity, then
 		// we'll cancel the HTLC as the payment cannot
 		// succeed.
 		if destination == nil {
-			log.Errorf("unable to forward HTLC channels has "+
+			log.Errorf("unable to Forward HTLC channels has "+
 				"insufficient capacity, need %v", htlc.Amount)
 
 			reason := []byte{byte(lnwire.InsufficientCapacity)}
-			source.HandleRequest(NewCancelRequest(
-				request.ChannelPoint,
+			source.HandleRequest(newFailRequest(
+				request.channelPoint,
 				&lnwire.UpdateFailHTLC{
 					Reason: reason,
 				},
@@ -218,13 +230,13 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 	// We've just received a settle request which means we can finalize the
 	// payment circuit by forwarding the settle msg to the channel from
 	// which HTLC add request was initially received.
-	case ForwardSettleRequest:
-		htlc := request.Htlc.(*lnwire.UpdateFufillHTLC)
+	case forwardSettleRequest:
+		htlc := request.htlc.(*lnwire.UpdateFufillHTLC)
 		rHash := fastsha256.Sum256(htlc.PaymentPreimage[:])
 
 		// Exit if we can't find and remove the active circuit to
 		// continue propagating the cancel over.
-		circuit, err := s.circuits.remove(rHash, *request.ChannelPoint)
+		circuit, err := s.circuits.remove(rHash, *request.channelPoint)
 		if err != nil {
 			command.err <- errors.Errorf("unable to remove "+
 				"circuit for payment hash: %v", rHash)
@@ -235,7 +247,7 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		source, err := s.Get(circuit.Src)
 		if err != nil {
 			command.err <- errors.Errorf("unable to get source "+
-				"htlc manager to forward settle htlc:", err)
+				"htlc manager to Forward settle htlc:", err)
 			return
 		}
 
@@ -246,10 +258,10 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		command.err <- source.HandleRequest(request)
 		return
 
-	case CancelRequest:
+	case failRequest:
 		// Exit if we can't find and remove the active circuit to
 		// continue propagating the cancel over.
-		circuit, err := s.circuits.remove(request.PayHash, *request.ChannelPoint)
+		circuit, err := s.circuits.remove(request.payHash, *request.channelPoint)
 		if err != nil {
 			command.err <- errors.Errorf("unable to remove "+
 				"circuit for payment hash: %v", err)
@@ -260,12 +272,12 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 		source, err := s.Get(circuit.Src)
 		if err != nil {
 			command.err <- errors.Errorf("unable to get source "+
-				"htlc manager to forward settle htlc:", err)
+				"htlc manager to Forward settle htlc:", err)
 			return
 		}
 
 		log.Debugf("Closing canceled onion "+
-			"circuit for %x: %v<->%v", request.PayHash[:],
+			"circuit for %x: %v<->%v", request.payHash[:],
 			circuit.Src,
 			circuit.Dest)
 
@@ -278,7 +290,7 @@ func (s *HTLCSwitch) handleForward(command *requestForward) {
 }
 
 // CloseChannel...
-func (h *HTLCSwitch) CloseChannel(chanPoint *wire.OutPoint,
+func (s *Switch) CloseChannel(chanPoint *wire.OutPoint,
 	closeType ChannelCloseType) (chan *lnrpc.CloseStatusUpdate, chan error) {
 
 	updateChan := make(chan *lnrpc.CloseStatusUpdate, 1)
@@ -292,18 +304,18 @@ func (h *HTLCSwitch) CloseChannel(chanPoint *wire.OutPoint,
 	}
 
 	select {
-	case h.commands <- command:
+	case s.commands <- command:
 		return updateChan, errChan
 
-	case <-h.quit:
+	case <-s.quit:
 		return nil, nil
 	}
 }
 
 // handleCloseLink sends a message to the peer responsible for the target
 // channel point, instructing it to initiate a cooperative channel closure.
-func (h *HTLCSwitch) handleChanelClose(command *ChanClose) error {
-	manager, ok := h.managers[*command.ChanPoint]
+func (s *Switch) handleChanelClose(command *ChanClose) error {
+	manager, ok := s.managers[*command.ChanPoint]
 	if !ok {
 		return errors.Errorf("channel point %v not found, or peer "+
 			"offline", command.ChanPoint)
@@ -323,7 +335,7 @@ func (h *HTLCSwitch) handleChanelClose(command *ChanClose) error {
 // startHandling start handling inner command requests and print the
 // htlc switch statistics.
 // NOTE: Should be run as goroutine.
-func (s *HTLCSwitch) startHandling() {
+func (s *Switch) startHandling() {
 	defer s.wg.Done()
 
 	// TODO(roasbeef): cleared vs settled distinction
@@ -377,7 +389,7 @@ func (s *HTLCSwitch) startHandling() {
 }
 
 // Start starts all helper goroutines required for the operation of the switch.
-func (s *HTLCSwitch) Start() error {
+func (s *Switch) Start() error {
 	if !atomic.CompareAndSwapInt32(&s.started, 0, 1) {
 		log.Warn("htlc switch already started")
 		return nil
@@ -393,7 +405,7 @@ func (s *HTLCSwitch) Start() error {
 
 // Stop gracefully stops all active helper goroutines, then waits until they've
 // exited.
-func (s *HTLCSwitch) Stop() error {
+func (s *Switch) Stop() error {
 	if !atomic.CompareAndSwapInt32(&s.shutdown, 0, 1) {
 		log.Warn("htlc switch already stopped")
 		return nil
@@ -413,7 +425,7 @@ func (s *HTLCSwitch) Stop() error {
 
 // Add is used to add and start the newly created HTLC manager ans start use it
 // to propagate HTLCs.
-func (s *HTLCSwitch) Add(manager HTLCManager) error {
+func (s *Switch) Add(manager HTLCManager) error {
 	if err := manager.Start(); err != nil {
 		return err
 	}
@@ -422,14 +434,14 @@ func (s *HTLCSwitch) Add(manager HTLCManager) error {
 	s.managers[*manager.ID()] = manager
 	s.mutex.Unlock()
 
-	log.Infof("Added htlc manager for ChannelPoint(%v), bandwidth=%v",
+	log.Infof("Added htlc manager for channelPoint(%v), bandwidth=%v",
 		manager.ID(), manager.Bandwidth())
 	return nil
 }
 
 // Remove is used to remove and stop the htlc manager by channel point of the
 // channel which htlc manager is managing.
-func (s *HTLCSwitch) RemoveByChan(chanPoint wire.OutPoint) error {
+func (s *Switch) RemoveByChan(chanPoint wire.OutPoint) error {
 	manager, err := s.Get(chanPoint)
 	if err != nil {
 		return err
@@ -440,7 +452,7 @@ func (s *HTLCSwitch) RemoveByChan(chanPoint wire.OutPoint) error {
 
 // Get returns the htlc manager which corresponds to the channel which he is
 // managing.
-func (s *HTLCSwitch) Get(chanPoint wire.OutPoint) (HTLCManager, error) {
+func (s *Switch) Get(chanPoint wire.OutPoint) (HTLCManager, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -453,7 +465,7 @@ func (s *HTLCSwitch) Get(chanPoint wire.OutPoint) (HTLCManager, error) {
 }
 
 // RemoveById removes all HTLC managers which correspond to destination id.
-func (s *HTLCSwitch) RemoveById(id *routing.HopID) error {
+func (s *Switch) RemoveById(id *routing.HopID) error {
 	managers, err := s.getManagersByDest(id)
 	if err != nil {
 		return err
@@ -469,7 +481,7 @@ func (s *HTLCSwitch) RemoveById(id *routing.HopID) error {
 }
 
 // remove is helper function which removes and stops HTLC manager.
-func (s *HTLCSwitch) remove(manager HTLCManager) error {
+func (s *Switch) remove(manager HTLCManager) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -477,13 +489,13 @@ func (s *HTLCSwitch) remove(manager HTLCManager) error {
 	delete(s.managers, *chanPoint)
 	manager.Stop()
 
-	log.Infof("Remove htlc manager for ChannelPoint(%v)", manager.ID())
+	log.Infof("Remove htlc manager for channelPoint(%v)", manager.ID())
 	return nil
 }
 
 // getManagersByDest is helper function which returns the htlc managers by hop
 // destination id.
-func (s *HTLCSwitch) getManagersByDest(destination *routing.HopID) ([]HTLCManager,
+func (s *Switch) getManagersByDest(destination *routing.HopID) ([]HTLCManager,
 	error) {
 
 	s.mutex.RLock()

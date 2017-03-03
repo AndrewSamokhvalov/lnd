@@ -38,7 +38,7 @@ func GenerateRandomBytes(n int) ([]byte, error) {
 	b[0] = byte(1)
 
 	_, err := rand.Read(b[1:])
-	// Note that err == nil only if we read len(b) bytes.
+	// Note that Err == nil only if we read len(b) bytes.
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +244,7 @@ type Cluster struct {
 // * create Carol payment request.
 // * handle user request by Carol HTLC switch.
 func (c *Cluster) MakeCarolToAlicePayment(amount btcutil.Amount,
-	wrongRhash bool, wrongHop bool) (chan error, *channeldb.Invoice, error) {
+	wrongRhash bool, wrongHop bool) (*Response, *channeldb.Invoice, error) {
 
 	rand.Seed(time.Now().UTC().UnixNano())
 
@@ -295,7 +295,7 @@ func (c *Cluster) MakeCarolToAlicePayment(amount btcutil.Amount,
 	var onionBlob [lnwire.OnionPacketSize]byte
 	copy(onionBlob[:], data)
 
-	request := NewUserAddRequest(hop, &lnwire.UpdateAddHTLC{
+	request := newUserAddRequest(hop, &lnwire.UpdateAddHTLC{
 		PaymentHash: rhash,
 		OnionBlob:   onionBlob,
 		Amount:      amount,
@@ -305,7 +305,7 @@ func (c *Cluster) MakeCarolToAlicePayment(amount btcutil.Amount,
 		return nil, nil, err
 	}
 
-	return request.Error(), invoice, nil
+	return request.response, invoice, nil
 }
 
 // MakeBobToAlicePayment makes payment from Bob to Alice which includes:
@@ -313,7 +313,7 @@ func (c *Cluster) MakeCarolToAlicePayment(amount btcutil.Amount,
 // * create Bob payment request.
 // * handle user request by Bob HTLC switch.
 func (c *Cluster) MakeBobToAlicePayment(amount btcutil.Amount) (
-	chan error, *channeldb.Invoice, error) {
+	*Response, *channeldb.Invoice, error) {
 
 	preimage := [sha256.Size]byte{byte(rand.Int())}
 	rhash := fastsha256.Sum256(preimage[:])
@@ -336,7 +336,7 @@ func (c *Cluster) MakeBobToAlicePayment(amount btcutil.Amount) (
 	var onionBlob [lnwire.OnionPacketSize]byte
 	copy(onionBlob[:], data)
 
-	request := NewUserAddRequest(hop, &lnwire.UpdateAddHTLC{
+	request := newUserAddRequest(hop, &lnwire.UpdateAddHTLC{
 		PaymentHash: rhash,
 		OnionBlob:   onionBlob,
 		Amount:      amount,
@@ -346,7 +346,7 @@ func (c *Cluster) MakeBobToAlicePayment(amount btcutil.Amount) (
 		return nil, nil, err
 	}
 
-	return request.Error(), invoice, nil
+	return request.response, invoice, nil
 }
 
 func (c *Cluster) StartCluster() error {

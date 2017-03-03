@@ -29,7 +29,7 @@ type MockServer struct {
 	messages    chan lnwire.Message
 	quit        chan bool
 	id          []byte
-	htlcSwitch  *HTLCSwitch
+	htlcSwitch  *Switch
 	wg          sync.WaitGroup
 	recordFuncs []func(lnwire.Message)
 }
@@ -43,7 +43,7 @@ func NewMockServer(t *testing.T, name string) *MockServer {
 		name:        name,
 		messages:    make(chan lnwire.Message, 50),
 		quit:        make(chan bool),
-		htlcSwitch:  NewHTLCSwitch(),
+		htlcSwitch:  New(),
 		recordFuncs: make([]func(lnwire.Message), 0),
 	}
 }
@@ -288,19 +288,19 @@ var _ InvoiceDatabase = (*MockInvoiceRegistry)(nil)
 type MockHtlcManager struct {
 	ChanPoint *wire.OutPoint
 	peer Peer
-	Requests  chan *SwitchRequest
+	Requests  chan *request
 }
 
 func NewMockHTLCManager(chanPoint *wire.OutPoint,
 	peer Peer) *MockHtlcManager {
 	return &MockHtlcManager{
 		ChanPoint: chanPoint,
-		Requests:  make(chan *SwitchRequest, 1),
+		Requests:  make(chan *request, 1),
 		peer: peer,
 	}
 }
 
-func (f *MockHtlcManager) HandleRequest(request *SwitchRequest) error {
+func (f *MockHtlcManager) HandleRequest(request *request) error {
 	f.Requests <- request
 	return nil
 }

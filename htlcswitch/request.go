@@ -6,113 +6,120 @@ import (
 	"github.com/roasbeef/btcd/wire"
 )
 
-// RequestType represents the type of HTLC switch request type, and it is needed
+// requestType represents the type of HTLC switch request type, and it is needed
 // for compilation error in case if wrong type was specified.
-type RequestType uint8
+type requestType uint8
 
 const (
-	// ForwardAddRequest encapsulates the HTLC add request which should be
+	// forwardAddRequest encapsulates the HTLC add request which should be
 	// propagated to another channel over HTLC switch.
-	ForwardAddRequest RequestType = iota
+	forwardAddRequest requestType = iota
 
-	// UserAddRequest encapsulates the HTLC add request which made by user
+	// userAddRequest encapsulates the HTLC add request which made by user
 	// and the state of which should be propagated back to user after HTLC
 	// will be settled.
-	UserAddRequest
+	userAddRequest
 
-	// ForwardSettleRequest encapsulates the settle HTLC request which
+	// forwardSettleRequest encapsulates the settle HTLC request which
 	// made by last hope and propagated back to the original hope which sent
 	// the HTLC add request.
-	ForwardSettleRequest
+	forwardSettleRequest
 
-	// CancelRequest encapsulates the cancel HTLC request which propagated
+	// failRequest encapsulates the cancel HTLC request which propagated
 	// back to the original hope which sent the HTLC add request.
-	CancelRequest
+	failRequest
 )
 
-// SwitchRequest...
-type SwitchRequest struct {
-	// Type is a type of switch request which is used to determine the
+// Response...
+type Response struct {
+	// Err is an error channel which is used to notify user about
+	// status of payment request is it was canceled or successfully
+	// settled.
+	Err chan error
+
+	// Preimage...
+	Preimage chan [32]byte
+}
+
+// newResponse..
+func newResponse() *Response {
+	return &Response{
+		Err:      make(chan error, 1),
+		Preimage: make(chan [32]byte, 1),
+	}
+}
+
+// request...
+type request struct {
+	// rType is a type of switch request which is used to determine the
 	// necessary behaviour. For example: If HTLC was settled - should we
 	// send the notification over error channel or propagate it back
 	// over HTLC switch?
-	Type RequestType
+	rType requestType
 
-	// PayHash payment hash of htlc request.
-	PayHash [32]byte
+	// payHash payment hash of htlc request.
+	payHash [32]byte
 
-	// Dest is the next peer in HTLC path.
-	Dest *routing.HopID
+	// dest is the next peer in HTLC path.
+	dest *routing.HopID
 
-	// ChannelPoint channel point from which HTLC message came from.
-	ChannelPoint *wire.OutPoint
+	// channelPoint channel point from which HTLC message came from.
+	channelPoint *wire.OutPoint
 
-	// Htlc lnwire HTLC message type of which depends on switch request
+	// htlc lnwire HTLC message type of which depends on switch request
 	// type.
-	Htlc lnwire.Message
+	htlc lnwire.Message
 
-	// err is an error channel which is used to notify user about
-	// status of payment request is it was canceled or successfully
-	// settled.
-	err chan error
+	// response...
+	response *Response
 }
 
-// Error function is used to return request channel error, which make sense
-// only on user request.
-func (r *SwitchRequest) Error() chan error {
-	if r.Type == UserAddRequest {
-		return r.err
-	} else {
-		panic("only user request has error channel")
+// newUserAddRequest creates new switch request with userAddRequest type, for
+// more information look at userAddRequest comments.
+func newUserAddRequest(dest *routing.HopID,
+	htlc *lnwire.UpdateAddHTLC) *request {
+	return &request{
+		rType:    userAddRequest,
+		dest:     dest,
+		htlc:     lnwire.Message(htlc),
+		response: newResponse(),
 	}
 }
 
-// NewUserAddRequest creates new switch request with UserAddRequest type, for
-// more information look at UserAddRequest comments.
-func NewUserAddRequest(dest *routing.HopID,
-	htlc *lnwire.UpdateAddHTLC) *SwitchRequest {
-	return &SwitchRequest{
-		Type: UserAddRequest,
-		Dest: dest,
-		Htlc: lnwire.Message(htlc),
-		err:  make(chan error),
-	}
-}
-
-// NewForwardAddRequest creates new switch request with ForwardAddRequest type,
-// for more information look at ForwardAddRequest type comments.
+// newForwardAddRequest creates new switch request with forwardAddRequest type,
+// for more information look at forwardAddRequest type comments.
 // NOTE: the name "source" is considered in terms of htlc switch circuit.
-func NewForwardAddRequest(dest *routing.HopID, source *wire.OutPoint,
-	htlc *lnwire.UpdateAddHTLC) *SwitchRequest {
-	return &SwitchRequest{
-		Type:         ForwardAddRequest,
-		Dest:         dest,
-		ChannelPoint: source,
-		Htlc:         lnwire.Message(htlc),
+func newForwardAddRequest(dest *routing.HopID, source *wire.OutPoint,
+	htlc *lnwire.UpdateAddHTLC) *request {
+	return &request{
+		rType:        forwardAddRequest,
+		dest:         dest,
+		channelPoint: source,
+		htlc:         lnwire.Message(htlc),
 	}
 }
 
-// NewForwardSettleRequest creates new switch request with ForwardSettleRequest
-// type, for more information look at ForwardSettleRequest type comments.
+// newForwardSettleRequest creates new switch request with forwardSettleRequest
+// type, for more information look at forwardSettleRequest type comments.
 // NOTE: the name "source" is considered from htlc switch POV.
-func NewForwardSettleRequest(destination *wire.OutPoint,
-	htlc *lnwire.UpdateFufillHTLC) *SwitchRequest {
-	return &SwitchRequest{
-		Type:         ForwardSettleRequest,
-		ChannelPoint: destination,
-		Htlc:         lnwire.Message(htlc),
+func newForwardSettleRequest(destination *wire.OutPoint,
+	htlc *lnwire.UpdateFufillHTLC) *request {
+	return &request{
+		rType:        forwardSettleRequest,
+		channelPoint: destination,
+		htlc:         lnwire.Message(htlc),
 	}
 }
 
-// NewCancelRequest creates new switch request with CancelRequest type, for more
-// information look at CancelRequest type comments.
+// newFailRequest creates new switch request with failRequest type, for more
+// information look at failRequest type comments.
 // NOTE: the name "destination" is considered from htlc switch POV.
-func NewCancelRequest(destination *wire.OutPoint, htlc *lnwire.UpdateFailHTLC,
-	payHash [32]byte) *SwitchRequest {
-	return &SwitchRequest{
-		Type:         CancelRequest,
-		ChannelPoint: destination,
-		PayHash:      payHash,
-		Htlc:         htlc,
+func newFailRequest(destination *wire.OutPoint, htlc *lnwire.UpdateFailHTLC,
+	payHash [32]byte) *request {
+	return &request{
+		rType:        failRequest,
+		channelPoint: destination,
+		payHash:      payHash,
+		htlc:         htlc,
 	}
 }

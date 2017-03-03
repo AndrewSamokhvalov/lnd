@@ -20,10 +20,10 @@ var (
 	chanPoint2 = wire.NewOutPoint(hash2, 0)
 )
 
-// TestHtlcSwitchForward checks the ability o htlc switch to forward add/settle
+// TestHtlcSwitchForward checks the ability o htlc switch to Forward add/settle
 // requests.
 func TestHtlcSwitchForward(t *testing.T) {
-	var request *SwitchRequest
+	var request *request
 
 	alicePeer := NewMockServer(t, "alice")
 	bobPeer := NewMockServer(t, "bob")
@@ -31,7 +31,7 @@ func TestHtlcSwitchForward(t *testing.T) {
 	aliceHltcManager := NewMockHTLCManager(chanPoint1, alicePeer)
 	bobHtlcManager := NewMockHTLCManager(chanPoint2, bobPeer)
 
-	htlcSwitch := NewHTLCSwitch()
+	htlcSwitch := New()
 	htlcSwitch.Start()
 	htlcSwitch.Add(aliceHltcManager)
 	htlcSwitch.Add(bobHtlcManager)
@@ -40,7 +40,7 @@ func TestHtlcSwitchForward(t *testing.T) {
 	// to bob htlc mananger.
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
-	request = NewForwardAddRequest(
+	request = newForwardAddRequest(
 		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
 		&lnwire.UpdateAddHTLC{
@@ -67,7 +67,7 @@ func TestHtlcSwitchForward(t *testing.T) {
 	// Create settle request pretending that bob htlc manager handled
 	// the add htlc request and sent the htlc settle request back. This
 	// request should be forwarder back to alice htlc manager.
-	request = NewForwardSettleRequest(
+	request = newForwardSettleRequest(
 		bobHtlcManager.ID(),
 		&lnwire.UpdateFufillHTLC{
 			PaymentPreimage: preimage,
@@ -94,7 +94,7 @@ func TestHtlcSwitchForward(t *testing.T) {
 // TestHtlcSwitchCancel checks that if htlc was rejected we remove unused
 // circuits.
 func TestHtlcSwitchCancel(t *testing.T) {
-	var request *SwitchRequest
+	var request *request
 
 	alicePeer := NewMockServer(t, "alice")
 	bobPeer := NewMockServer(t, "bob")
@@ -102,7 +102,7 @@ func TestHtlcSwitchCancel(t *testing.T) {
 	aliceHltcManager := NewMockHTLCManager(chanPoint1, alicePeer)
 	bobHtlcManager := NewMockHTLCManager(chanPoint2, bobPeer)
 
-	htlcSwitch := NewHTLCSwitch()
+	htlcSwitch := New()
 	htlcSwitch.Start()
 	htlcSwitch.Add(aliceHltcManager)
 	htlcSwitch.Add(bobHtlcManager)
@@ -111,7 +111,7 @@ func TestHtlcSwitchCancel(t *testing.T) {
 	// to bob htlc manager.
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
-	request = NewForwardAddRequest(
+	request = newForwardAddRequest(
 		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
 		&lnwire.UpdateAddHTLC{
@@ -138,7 +138,7 @@ func TestHtlcSwitchCancel(t *testing.T) {
 	// Create settle request pretending that bob htlc manager handled
 	// the add htlc request and sent the htlc settle request back. This
 	// request should be forwarder back to alice htlc manager.
-	request = NewCancelRequest(
+	request = newFailRequest(
 		bobHtlcManager.ID(),
 		&lnwire.UpdateFailHTLC{},
 		rhash,
@@ -164,7 +164,7 @@ func TestHtlcSwitchCancel(t *testing.T) {
 // TestAddSamePayment tests that we send the payment with the same
 // payment hash.
 func TestAddSamePayment(t *testing.T) {
-	var request *SwitchRequest
+	var request *request
 
 	alicePeer := NewMockServer(t, "alice")
 	bobPeer := NewMockServer(t, "bob")
@@ -172,7 +172,7 @@ func TestAddSamePayment(t *testing.T) {
 	aliceHltcManager := NewMockHTLCManager(chanPoint1, alicePeer)
 	bobHtlcManager := NewMockHTLCManager(chanPoint2, bobPeer)
 
-	htlcSwitch := NewHTLCSwitch()
+	htlcSwitch := New()
 	htlcSwitch.Start()
 	htlcSwitch.Add(aliceHltcManager)
 	htlcSwitch.Add(bobHtlcManager)
@@ -181,7 +181,7 @@ func TestAddSamePayment(t *testing.T) {
 	// to bob htlc manager.
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
-	request = NewForwardAddRequest(
+	request = newForwardAddRequest(
 		routing.NewHopID(bobHtlcManager.Peer().PubKey()),
 		aliceHltcManager.ID(),
 		&lnwire.UpdateAddHTLC{
@@ -217,7 +217,7 @@ func TestAddSamePayment(t *testing.T) {
 	// Create settle request pretending that bob htlc manager handled
 	// the add htlc request and sent the htlc settle request back. This
 	// request should be forwarder back to alice htlc manager.
-	request = NewCancelRequest(
+	request = newFailRequest(
 		bobHtlcManager.ID(),
 		&lnwire.UpdateFailHTLC{},
 		rhash,

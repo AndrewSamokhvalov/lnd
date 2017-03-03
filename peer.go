@@ -262,7 +262,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 				SettledContracts: p.server.breachArbiter.settledContracts,
 				DebugHTLC:        cfg.DebugHTLC,
 				Registry:         p.server.invoices,
-				Forward:          p.server.htlcSwitch.Forward,
+				Forward:          p.server.htlcSwitch.forward,
 			}, lnChan)
 
 		if err := p.server.htlcSwitch.Add(htlcManager); err != nil {

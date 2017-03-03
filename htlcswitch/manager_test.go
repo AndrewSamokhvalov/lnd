@@ -62,7 +62,7 @@ func TestSingleHopPayment(t *testing.T) {
 	}
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	paymentErrorChan, invoice, err := c.MakeBobToAlicePayment(amount)
+	response, invoice, err := c.MakeBobToAlicePayment(amount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestSingleHopPayment(t *testing.T) {
 	// * alice<->bob commitment state to be updated.
 	// * user notification to be sent.
 	select {
-	case err := <-paymentErrorChan:
+	case err := <-response.Err:
 		if err != nil {
 			t.Fatalf("something wrong went when sending request: "+
 				"%v", err)
@@ -135,7 +135,7 @@ func TestMultiHopPayment(t *testing.T) {
 	}
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	paymentErrorChan, invoice, err := c.MakeCarolToAlicePayment(amount,
+	response, invoice, err := c.MakeCarolToAlicePayment(amount,
 		false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestMultiHopPayment(t *testing.T) {
 	// * Carol<->Bob commitment states to be updated.
 	// * user notification to be sent.
 	select {
-	case err := <-paymentErrorChan:
+	case err := <-response.Err:
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +204,7 @@ func TestMultiHopInsufficientPayment(t *testing.T) {
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
 
 	var amount btcutil.Amount = 4 * btcutil.SatoshiPerBitcoin
-	paymentErrorChan, invoice, err := c.MakeCarolToAlicePayment(amount,
+	response, invoice, err := c.MakeCarolToAlicePayment(amount,
 		false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +217,7 @@ func TestMultiHopInsufficientPayment(t *testing.T) {
 	// * Cancel HTLC request to be sent back from Bob to Carol.
 	// * user notification to be sent.
 	select {
-	case err := <-paymentErrorChan:
+	case err := <-response.Err:
 		if err == nil {
 			t.Fatal("error wasn't received")
 		}
@@ -268,14 +268,14 @@ func TestMultiHopUnknownPaymentHash(t *testing.T) {
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	paymentErrorChan, invoice, err := c.MakeCarolToAlicePayment(amount,
+	response, invoice, err := c.MakeCarolToAlicePayment(amount,
 		true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	select {
-	case err := <-paymentErrorChan:
+	case err := <-response.Err:
 		if err == nil {
 			t.Fatal("error wasn't received")
 		}
@@ -327,14 +327,14 @@ func TestMultiHopUnknownNextHop(t *testing.T) {
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	paymentRemoteErrorChan, invoice, err := c.MakeCarolToAlicePayment(amount,
+	response, invoice, err := c.MakeCarolToAlicePayment(amount,
 		false, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	select {
-	case err := <-paymentRemoteErrorChan:
+	case err := <-response.Err:
 		if err == nil {
 			t.Fatal("error wasn't received")
 		}
@@ -392,14 +392,14 @@ func TestMultiHopDecodeError(t *testing.T) {
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	paymentRemoteErrorChan, invoice, err := c.MakeCarolToAlicePayment(amount,
+	response, invoice, err := c.MakeCarolToAlicePayment(amount,
 		false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	select {
-	case err := <-paymentRemoteErrorChan:
+	case err := <-response.Err:
 		if err == nil {
 			t.Fatal("error wasn't received")
 		}
@@ -520,7 +520,7 @@ func TestSingleHopMessageOrdering(t *testing.T) {
 	defer c.StopCluster()
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	paymentErrorChan, _, err := c.MakeBobToAlicePayment(amount)
+	response, _, err := c.MakeBobToAlicePayment(amount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +531,7 @@ func TestSingleHopMessageOrdering(t *testing.T) {
 	// * settle request to be sent back from alice to bob
 	// * alice<->bob commitment state to be updated
 	select {
-	case err := <-paymentErrorChan:
+	case err := <-response.Err:
 		if err != nil {
 			t.Fatalf("something wrong went when sending request: "+
 				"%v", err)
