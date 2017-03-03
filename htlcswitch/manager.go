@@ -172,7 +172,7 @@ type htlcManager struct {
 	// The index of the HTLC within the log is mapped to the cancellation
 	// reason. This value is used to thread the proper error through to the
 	// htlcSwitch, or subsystem that initiated the HTLC.
-	cancelReasons map[uint64]lnwire.OpaqueReason
+	cancelReasons map[uint64]lnwire.FailCode
 
 	// blobs tracks the remote log index of the incoming HTLC's,
 	// mapped to the htlc blob which encapsulate next hop.
@@ -210,7 +210,7 @@ func NewHTLCManager(cfg *HTLCManagerConfig,
 		notSettleHTLCs:      make(map[uint64]*SwitchRequest),
 		blobs:               make(map[uint32][lnwire.OnionPacketSize]byte),
 		commands:            make(chan interface{}),
-		cancelReasons:       make(map[uint64]lnwire.OpaqueReason),
+		cancelReasons:       make(map[uint64]lnwire.FailCode),
 		delayedUpdateTicker: time.NewTicker(updateDelay),
 		quit:                make(chan bool, 1),
 	}
