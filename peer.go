@@ -990,6 +990,16 @@ func (p *peer) sendInitMsg() error {
 	return nil
 }
 
+// fetchNextPendingChanID provides unique IDs for each channel opened between
+// two peers
+func (p *peer) fetchNextPendingChanID() uint64 {
+	p.pendingChannelMtx.Lock()
+	defer p.pendingChannelMtx.Unlock()
+
+	chanID := p.nextPendingChannelID
+	p.nextPendingChannelID++
+	return chanID
+}
 
 func (p *peer) SendMessage(msg lnwire.Message) error {
 	p.queueMsg(msg, nil)
