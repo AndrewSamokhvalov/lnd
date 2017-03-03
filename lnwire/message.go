@@ -326,7 +326,7 @@ func ReadMessage(r io.Reader, pver uint32, btcnet wire.BitcoinNet) (int, Message
 // each of the field elements in the curve parameters for secp256k1.
 func MessageToStringClosure(msg Message) logClosure {
 	switch m := msg.(type) {
-	case *CommitRevocation:
+	case *RevokeAndAck:
 		m.NextRevocationKey.Curve = nil
 	case *NodeAnnouncement:
 		m.NodeID.Curve = nil

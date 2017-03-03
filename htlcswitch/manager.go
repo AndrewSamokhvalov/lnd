@@ -2,6 +2,10 @@ package htlcswitch
 
 import (
 	"crypto/sha256"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -11,9 +15,6 @@ import (
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 // InvoiceDatabase is an interface which represents the system which may
@@ -165,17 +166,17 @@ type htlcManager struct {
 
 	// notSettleHTLCs is a map of outgoing HTLC's we've committed to in
 	// our chain which have not yet been settled by the peer.
-	notSettleHTLCs map[uint32]*SwitchRequest
+	notSettleHTLCs map[uint64]*SwitchRequest
 
 	// cancelReasons stores the reason why a particular HTLC was cancelled.
 	// The index of the HTLC within the log is mapped to the cancellation
 	// reason. This value is used to thread the proper error through to the
 	// htlcSwitch, or subsystem that initiated the HTLC.
-	cancelReasons map[uint32]lnwire.CancelReason
+	cancelReasons map[uint64]lnwire.OpaqueReason
 
 	// blobs tracks the remote log index of the incoming HTLC's,
 	// mapped to the htlc blob which encapsulate next hop.
-	blobs map[uint32][]byte
+	blobs map[uint32][lnwire.OnionPacketSize]byte
 
 	// channel is a lightning network channel to which we apply htlc requests.
 	channel *lnwallet.LightningChannel
@@ -206,10 +207,10 @@ func NewHTLCManager(cfg *HTLCManagerConfig,
 	return &htlcManager{
 		cfg:                 cfg,
 		channel:             channel,
-		notSettleHTLCs:      make(map[uint32]*SwitchRequest),
-		blobs:               make(map[uint32][]byte),
+		notSettleHTLCs:      make(map[uint64]*SwitchRequest),
+		blobs:               make(map[uint32][lnwire.OnionPacketSize]byte),
 		commands:            make(chan interface{}),
-		cancelReasons:       make(map[uint32]lnwire.CancelReason),
+		cancelReasons:       make(map[uint64]lnwire.OpaqueReason),
 		delayedUpdateTicker: time.NewTicker(updateDelay),
 		quit:                make(chan bool, 1),
 	}
@@ -241,9 +242,8 @@ func (mgr *htlcManager) HandleMessage(message lnwire.Message) error {
 func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 	switch msg := message.(type) {
 
-	case *lnwire.CancelHTLC:
-		idx := uint32(msg.HTLCKey)
-		if err := mgr.channel.ReceiveCancelHTLC(idx); err != nil {
+	case *lnwire.UpdateFailHTLC:
+		if err := mgr.channel.ReceiveFailHTLC(msg.ID); err != nil {
 			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unable to recv HTLC cancel: %v", err)
 		}
@@ -252,10 +252,10 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 		// be included we should save the reason of HTLC cancellation
 		// and then use it later to notify user or propagate cancel HTLC
 		// message to another peer over htlc switch.
-		mgr.cancelReasons[idx] = msg.Reason
+		mgr.cancelReasons[msg.ID] = msg.Reason
 		mgr.delayedUpdateCommitTx()
 
-	case *lnwire.HTLCAddRequest:
+	case *lnwire.UpdateAddHTLC:
 		// We just received an add request from an remote peer, so we
 		// add it to our state machine.
 		index, err := mgr.channel.ReceiveHTLC(msg)
@@ -273,11 +273,10 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 		mgr.blobs[index] = msg.OnionBlob
 		mgr.delayedUpdateCommitTx()
 
-	case *lnwire.HTLCSettleRequest:
+	case *lnwire.UpdateFufillHTLC:
 		// TODO(roasbeef): this assumes no "multi-sig"
-		pre := msg.RedemptionProofs[0]
-		idx := uint32(msg.HTLCKey)
-		if err := mgr.channel.ReceiveHTLCSettle(pre, idx); err != nil {
+		pre := msg.PaymentPreimage
+		if err := mgr.channel.ReceiveHTLCSettle(pre, msg.ID); err != nil {
 			// TODO(roasbeef): broadcast on-chain
 			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("settle for outgoing HTLC rejected: %v", err)
@@ -286,13 +285,11 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 
 	// TODO(roasbeef): add pre-image to DB in order to swipe
 	// repeated r-values
-	case *lnwire.CommitSignature:
+	case *lnwire.CommitSig:
 		// We just received a new update to our local commitment chain,
 		// validate this new commitment, closing the link if invalid.
-		// TODO(roasbeef): use uint64 for indexes?
-		index := uint32(msg.LogIndex)
 		sig := msg.CommitSig.Serialize()
-		if err := mgr.channel.ReceiveNewCommitment(sig, index); err != nil {
+		if err := mgr.channel.ReceiveNewCommitment(sig); err != nil {
 			mgr.cfg.Peer.Disconnect()
 			return errors.Errorf("unable to accept new commitment: %v", err)
 		}
@@ -326,7 +323,7 @@ func (mgr *htlcManager) handleMessage(message lnwire.Message) error {
 		}
 		mgr.cfg.Peer.SendMessage(revocation)
 
-	case *lnwire.CommitRevocation:
+	case *lnwire.RevokeAndAck:
 		// We've received a revocation from the remote chain, if valid,
 		// this moves the remote chain forward, and expands our
 		// revocation window.
@@ -390,10 +387,10 @@ func (mgr *htlcManager) HandleRequest(request *SwitchRequest) error {
 // another channel, or sent to us from user who wants to send the payment.
 func (mgr *htlcManager) handleRequest(request *SwitchRequest) error {
 	switch htlc := request.Htlc.(type) {
-	case *lnwire.HTLCAddRequest:
+	case *lnwire.UpdateAddHTLC:
 		// A new payment has been initiated, so we add the new HTLC
 		// to our local log and the send it remote peer.
-		htlc.ChannelPoint = mgr.ID()
+		htlc.ChannelPoint = *mgr.ID()
 		index, err := mgr.channel.AddHTLC(htlc)
 		if err != nil {
 			// TODO: possibly perform fallback/retry logic
@@ -404,12 +401,12 @@ func (mgr *htlcManager) handleRequest(request *SwitchRequest) error {
 		mgr.notSettleHTLCs[index] = request
 		mgr.cfg.Peer.SendMessage(htlc)
 
-	case *lnwire.HTLCSettleRequest:
+	case *lnwire.UpdateFufillHTLC:
 		// HTLC switch notified us that HTLC which we forwarded was
 		// settled, so we need to propagate this htlc to remote
 		// peer.
 
-		preimage := htlc.RedemptionProofs[0]
+		preimage := htlc.PaymentPreimage
 		index, err := mgr.channel.SettleHTLC(preimage)
 		if err != nil {
 			// TODO(roasbeef): broadcast on-chain
@@ -417,12 +414,12 @@ func (mgr *htlcManager) handleRequest(request *SwitchRequest) error {
 			return errors.Errorf("settle for incoming HTLC rejected: %v", err)
 		}
 
-		htlc.ChannelPoint = mgr.ID()
-		htlc.HTLCKey = lnwire.HTLCKey(index)
+		htlc.ChannelPoint = *mgr.ID()
+		htlc.ID = index
 
 		mgr.cfg.Peer.SendMessage(htlc)
 
-	case *lnwire.CancelHTLC:
+	case *lnwire.UpdateFailHTLC:
 		// HTLC switch notified us that HTLC which we forwarded was
 		// canceled, so we need to propagate this htlc to remote
 		// peer.
@@ -571,14 +568,12 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 				requestsToForward = append(requestsToForward,
 					NewForwardSettleRequest(
 						mgr.ID(),
-						&lnwire.HTLCSettleRequest{
-							RedemptionProofs: [][32]byte{
-								pd.RPreimage,
-							},
+						&lnwire.UpdateFufillHTLC{
+							PaymentPreimage: pd.RPreimage,
 						}))
 			}
 
-		case lnwallet.Cancel:
+		case lnwallet.Fail:
 			request, ok := mgr.notSettleHTLCs[pd.ParentIndex]
 			if !ok {
 				continue
@@ -706,7 +701,7 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 // sendHTLCError functions cancels HTLC and send cancel message back to the
 // peer from which HTLC was received.
 func (mgr *htlcManager) sendHTLCError(rHash [32]byte,
-	reason lnwire.CancelReason) {
+	reason lnwire.OpaqueReason) {
 
 	index, err := mgr.channel.CancelHTLC(rHash)
 	if err != nil {

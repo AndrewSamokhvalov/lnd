@@ -3,21 +3,22 @@ package htlcswitch
 import (
 	"bytes"
 	"crypto/sha256"
-	"github.com/btcsuite/fastsha256"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/elkrem"
-	"github.com/lightningnetwork/lnd/lnwallet"
-	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/lightningnetwork/lnd/routing"
-	"github.com/roasbeef/btcd/btcec"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
-	"github.com/roasbeef/btcd/wire"
-	"github.com/roasbeef/btcutil"
 	"io/ioutil"
 	"math/rand"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/btcsuite/fastsha256"
+	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/lnwallet"
+	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightningnetwork/lnd/routing"
+	"github.com/lightningnetwork/lnd/shachain"
+	"github.com/roasbeef/btcd/btcec"
+	"github.com/roasbeef/btcd/chaincfg/chainhash"
+	"github.com/roasbeef/btcd/wire"
+	"github.com/roasbeef/btcutil"
 )
 
 var (
@@ -83,31 +84,24 @@ func CreateTestChannel(
 	}
 	fundingTxIn := wire.NewTxIn(prevOut, nil, nil)
 
-	theirElkrem := elkrem.NewElkremSender(
-		lnwallet.DeriveElkremRoot(
-			bobKeyPriv,
-			bobKeyPub,
-			aliceKeyPub,
-		),
-	)
-	bobFirstRevoke, err := theirElkrem.AtIndex(0)
+	bobRoot := lnwallet.DeriveRevocationRoot(bobKeyPriv, bobKeyPub, aliceKeyPub)
+	bobPreimageProducer := shachain.NewRevocationProducer(*bobRoot)
+	bobFirstRevoke, err := bobPreimageProducer.AtIndex(0)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	bobRevokeKey := lnwallet.DeriveRevocationPubkey(aliceKeyPub, bobFirstRevoke[:])
+	bobRevokeKey := lnwallet.DeriveRevocationPubkey(aliceKeyPub,
+		bobFirstRevoke[:])
 
-	ourElkrem := elkrem.NewElkremSender(
-		lnwallet.DeriveElkremRoot(
-			aliceKeyPriv,
-			aliceKeyPub,
-			bobKeyPub,
-		),
-	)
-	aliceFirstRevoke, err := ourElkrem.AtIndex(0)
+	aliceRoot := lnwallet.DeriveRevocationRoot(aliceKeyPriv, aliceKeyPub,
+		bobKeyPub)
+	alicePreimageProducer := shachain.NewRevocationProducer(*aliceRoot)
+	aliceFirstRevoke, err := alicePreimageProducer.AtIndex(0)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	aliceRevokeKey := lnwallet.DeriveRevocationPubkey(bobKeyPub, aliceFirstRevoke[:])
+	aliceRevokeKey := lnwallet.DeriveRevocationPubkey(bobKeyPub,
+		aliceFirstRevoke[:])
 
 	aliceCommitTx, err := lnwallet.CreateCommitTx(
 		fundingTxIn,
@@ -149,7 +143,7 @@ func CreateTestChannel(
 	var obsfucator [lnwallet.StateHintSize]byte
 	copy(obsfucator[:], aliceFirstRevoke[:])
 
-	firstChannelState := &channeldb.OpenChannel{
+	aliceChannelState := &channeldb.OpenChannel{
 		IdentityPub:            aliceKeyPub,
 		ChanID:                 prevOut,
 		ChanType:               channeldb.SingleFunder,
@@ -169,8 +163,8 @@ func CreateTestChannel(
 		LocalCsvDelay:          csvTimeoutAlice,
 		RemoteCsvDelay:         csvTimeoutBob,
 		TheirCurrentRevocation: bobRevokeKey,
-		LocalElkrem:            ourElkrem,
-		RemoteElkrem:           &elkrem.ElkremReceiver{},
+		RevocationProducer:     alicePreimageProducer,
+		RevocationStore:        shachain.NewRevocationStore(),
 		TheirDustLimit:         bobDustLimit,
 		OurDustLimit:           aliceDustLimit,
 		Db:                     dbAlice,
@@ -195,8 +189,8 @@ func CreateTestChannel(
 		LocalCsvDelay:          csvTimeoutBob,
 		RemoteCsvDelay:         csvTimeoutAlice,
 		TheirCurrentRevocation: aliceRevokeKey,
-		LocalElkrem:            theirElkrem,
-		RemoteElkrem:           &elkrem.ElkremReceiver{},
+		RevocationProducer:     bobPreimageProducer,
+		RevocationStore:        shachain.NewRevocationStore(),
 		TheirDustLimit:         aliceDustLimit,
 		OurDustLimit:           bobDustLimit,
 		Db:                     dbBob,
@@ -212,13 +206,13 @@ func CreateTestChannel(
 
 	notifier := &MockNotifier{}
 
-	channelAlice, err := lnwallet.NewLightningChannel(aliceSigner, nil,
-		notifier, firstChannelState)
+	channelAlice, err := lnwallet.NewLightningChannel(aliceSigner,
+		notifier, aliceChannelState)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	channelBob, err := lnwallet.NewLightningChannel(bobSigner, nil,
-		notifier, bobChannelState)
+	channelBob, err := lnwallet.NewLightningChannel(bobSigner, notifier,
+		bobChannelState)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -298,11 +292,13 @@ func (c *Cluster) MakeCarolToAlicePayment(amount btcutil.Amount,
 	if err != nil {
 		return nil, nil, err
 	}
+	var onionBlob [lnwire.OnionPacketSize]byte
+	copy(onionBlob[:], data)
 
-	request := NewUserAddRequest(hop, &lnwire.HTLCAddRequest{
-		RedemptionHashes: [][sha256.Size]byte{rhash},
-		OnionBlob:        data,
-		Amount:           amount,
+	request := NewUserAddRequest(hop, &lnwire.UpdateAddHTLC{
+		PaymentHash: rhash,
+		OnionBlob:   onionBlob,
+		Amount:      amount,
 	})
 
 	if err := c.carolServer.htlcSwitch.Forward(request); err != nil {
@@ -337,11 +333,13 @@ func (c *Cluster) MakeBobToAlicePayment(amount btcutil.Amount) (
 	if err != nil {
 		return nil, nil, err
 	}
+	var onionBlob [lnwire.OnionPacketSize]byte
+	copy(onionBlob[:], data)
 
-	request := NewUserAddRequest(hop, &lnwire.HTLCAddRequest{
-		RedemptionHashes: [][sha256.Size]byte{rhash},
-		OnionBlob:        data,
-		Amount:           amount,
+	request := NewUserAddRequest(hop, &lnwire.UpdateAddHTLC{
+		PaymentHash: rhash,
+		OnionBlob:   onionBlob,
+		Amount:      amount,
 	})
 
 	if err := c.bobServer.htlcSwitch.Forward(request); err != nil {

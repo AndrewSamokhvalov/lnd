@@ -88,8 +88,8 @@ func (t updateType) String() string {
 	switch t {
 	case Add:
 		return "Add"
-	case Cancel:
-		return "Cancel"
+	case Fail:
+		return "Fail"
 	case Settle:
 		return "Settle"
 	default:
@@ -1578,16 +1578,16 @@ func (lc *LightningChannel) NumUnAcked() int {
 	}
 }
 
-// NeedUpdate returns a boolean value reflecting if there are any pending
-// updates which need to be committed. The commitment transaction should
-// be updated if we have htlcs which are not committed in remote chain.
-func (lc *LightningChannel) NeedUpdate() bool {
-	lc.RLock()
-	defer lc.RUnlock()
-
-	return	lc.remoteCommitChain.tip().ourMessageIndex != lc.ourLogCounter ||
-		lc.remoteCommitChain.tip().theirMessageIndex != lc.theirLogCounter
-}
+//// NeedUpdate returns a boolean value reflecting if there are any pending
+//// updates which need to be committed. The commitment transaction should
+//// be updated if we have htlcs which are not committed in remote chain.
+//func (lc *LightningChannel) NeedUpdate() bool {
+//	lc.RLock()
+//	defer lc.RUnlock()
+//
+//	return	lc.remoteCommitChain.tip().ourMessageIndex != lc. ||
+//		lc.remoteCommitChain.tip().theirMessageIndex != lc.theirLogCounter
+//}
 
 // FullySynced is used to ensures that we receive the commitment transaction
 // back from remote side, and that the updates that we generated are included
