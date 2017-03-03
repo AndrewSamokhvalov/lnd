@@ -262,7 +262,7 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 				SettledContracts: p.server.breachArbiter.settledContracts,
 				DebugHTLC:        cfg.DebugHTLC,
 				Registry:         p.server.invoices,
-				Forward:          p.server.htlcSwitch.forward,
+				Forward:          p.server.htlcSwitch.Forward,
 			}, lnChan)
 
 		if err := p.server.htlcSwitch.Add(htlcManager); err != nil {
@@ -953,6 +953,43 @@ func (p *peer) WipeChannel(channel *lnwallet.LightningChannel) error {
 
 	return nil
 }
+
+// handleInitMsg handles the incoming init message which contains global and
+// local features vectors. If feature vectors are incompatible then disconnect.
+func (p *peer) handleInitMsg(msg *lnwire.Init) error {
+	localSharedFeatures, err := p.server.localFeatures.Compare(msg.LocalFeatures)
+	if err != nil {
+		err := errors.Errorf("can compare remote and local feature "+
+			"vectors: %v", err)
+		peerLog.Error(err)
+		return err
+	}
+	p.localSharedFeatures = localSharedFeatures
+
+	globalSharedFeatures, err := p.server.globalFeatures.Compare(msg.GlobalFeatures)
+	if err != nil {
+		err := errors.Errorf("can compare remote and global feature "+
+			"vectors: %v", err)
+		peerLog.Error(err)
+		return err
+	}
+	p.globalSharedFeatures = globalSharedFeatures
+
+	return nil
+}
+
+// sendInitMsg sends init message to remote peer which represent our
+// features local and global vectors.
+func (p *peer) sendInitMsg() error {
+	msg := lnwire.NewInitMessage(
+		p.server.globalFeatures,
+		p.server.localFeatures,
+	)
+
+	p.queueMsg(msg, nil)
+	return nil
+}
+
 
 func (p *peer) SendMessage(msg lnwire.Message) error {
 	p.queueMsg(msg, nil)
