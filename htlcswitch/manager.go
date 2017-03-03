@@ -701,17 +701,17 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 // sendHTLCError functions cancels HTLC and send cancel message back to the
 // peer from which HTLC was received.
 func (mgr *htlcManager) sendHTLCError(rHash [32]byte,
-	reason lnwire.OpaqueReason) {
+	reason lnwire.FailCode) {
 
-	index, err := mgr.channel.CancelHTLC(rHash)
+	index, err := mgr.channel.FailHTLC(rHash)
 	if err != nil {
 		log.Errorf("can't cancel htlc: %v", err)
 		return
 	}
 
-	mgr.cfg.Peer.SendMessage(&lnwire.CancelHTLC{
-		ChannelPoint: mgr.ID(),
-		HTLCKey:      lnwire.HTLCKey(index),
+	mgr.cfg.Peer.SendMessage(&lnwire.UpdateFailHTLC{
+		ChannelPoint: *mgr.ID(),
+		ID:           index,
 		Reason:       reason,
 	})
 }
