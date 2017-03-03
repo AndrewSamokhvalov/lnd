@@ -123,7 +123,8 @@ type HTLCManagerConfig struct {
 	// create hop iterator which gives us next route hop. This function
 	// is included in config because of test purpose where instead of sphinx
 	// encoded route we use simple array of hops.
-	DecodeOnion func(data []byte, meta []byte) (routing.HopIterator, error)
+	DecodeOnion func(data [lnwire.OnionPacketSize]byte, meta []byte) (
+		routing.HopIterator, error)
 
 	// Forward is a function which is used to forward the incoming HTLC
 	// requests to other peer which should handle it.
@@ -172,11 +173,11 @@ type htlcManager struct {
 	// The index of the HTLC within the log is mapped to the cancellation
 	// reason. This value is used to thread the proper error through to the
 	// htlcSwitch, or subsystem that initiated the HTLC.
-	cancelReasons map[uint64]lnwire.FailCode
+	cancelReasons map[uint64]lnwire.OpaqueReason
 
 	// blobs tracks the remote log index of the incoming HTLC's,
 	// mapped to the htlc blob which encapsulate next hop.
-	blobs map[uint32][lnwire.OnionPacketSize]byte
+	blobs map[uint64][lnwire.OnionPacketSize]byte
 
 	// channel is a lightning network channel to which we apply htlc requests.
 	channel *lnwallet.LightningChannel
@@ -208,9 +209,9 @@ func NewHTLCManager(cfg *HTLCManagerConfig,
 		cfg:                 cfg,
 		channel:             channel,
 		notSettleHTLCs:      make(map[uint64]*SwitchRequest),
-		blobs:               make(map[uint32][lnwire.OnionPacketSize]byte),
+		blobs:               make(map[uint64][lnwire.OnionPacketSize]byte),
 		commands:            make(chan interface{}),
-		cancelReasons:       make(map[uint64]lnwire.FailCode),
+		cancelReasons:       make(map[uint64]lnwire.OpaqueReason),
 		delayedUpdateTicker: time.NewTicker(updateDelay),
 		quit:                make(chan bool, 1),
 	}
@@ -592,10 +593,10 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 				requestsToForward = append(requestsToForward,
 					NewCancelRequest(
 						mgr.ID(),
-						&lnwire.CancelHTLC{
+						&lnwire.UpdateFailHTLC{
 							Reason:       reason,
-							ChannelPoint: mgr.ID(),
-							HTLCKey:      lnwire.HTLCKey(pd.Index),
+							ChannelPoint: *mgr.ID(),
+							ID:           pd.Index,
 						},
 						pd.RHash))
 			}
@@ -633,13 +634,16 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 					continue
 				}
 
+				var blob [lnwire.OnionPacketSize]byte
+				copy(blob[:], nextBlob)
+
 				requestsToForward = append(requestsToForward,
 					NewForwardAddRequest(
 						dest, mgr.ID(),
-						&lnwire.HTLCAddRequest{
-							Amount:           pd.Amount,
-							RedemptionHashes: [][32]byte{pd.RHash},
-							OnionBlob:        nextBlob,
+						&lnwire.UpdateAddHTLC{
+							Amount:      pd.Amount,
+							PaymentHash: pd.RHash,
+							OnionBlob:   blob,
 						}))
 			} else {
 				// We're the designated payment destination.
@@ -686,10 +690,10 @@ func (mgr *htlcManager) processHTLCsIncludedInBothChains(
 
 				// HTLC was successfully settled locally send
 				// notification about it remote peer.
-				mgr.cfg.Peer.SendMessage(&lnwire.HTLCSettleRequest{
-					ChannelPoint:     mgr.ID(),
-					HTLCKey:          lnwire.HTLCKey(logIndex),
-					RedemptionProofs: [][32]byte{preimage},
+				mgr.cfg.Peer.SendMessage(&lnwire.UpdateFufillHTLC{
+					ChannelPoint:    *mgr.ID(),
+					ID:              logIndex,
+					PaymentPreimage: preimage,
 				})
 			}
 		}
@@ -712,7 +716,7 @@ func (mgr *htlcManager) sendHTLCError(rHash [32]byte,
 	mgr.cfg.Peer.SendMessage(&lnwire.UpdateFailHTLC{
 		ChannelPoint: *mgr.ID(),
 		ID:           index,
-		Reason:       reason,
+		Reason:       []byte{byte(reason)},
 	})
 }
 
