@@ -17,6 +17,7 @@ import (
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"fmt"
 )
 
 // InvoiceDatabase is an interface which represents the system which may

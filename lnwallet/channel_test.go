@@ -6,8 +6,9 @@ import (
 	"os"
 	"testing"
 
+	"fmt"
+
 	"github.com/btcsuite/fastsha256"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -19,6 +20,7 @@ import (
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"github.com/davecgh/go-spew/spew"
 )
 
 var (
@@ -335,6 +337,30 @@ func createTestChannels(revocationWindow int) (*LightningChannel, *LightningChan
 // the state machine
 //  * DSL language perhaps?
 //  * constructed via input/output files
+
+//                 Alice                                  Bob
+//                   |                                     |
+// revoke commitment x (revocation) >--+    +----<  (htlc) x add htlc
+//                   |                  \  /               |
+//          add htlc x (htlc) >--+       \/                |
+//                   |            \      /\                |
+//                   |             \    /  \               |
+//                   |              \  /    +------------- x receive revocation
+//                   |               \/                    |
+//                   |               /\                    |
+//receive revocation x -------------/--\------------------ x send revocation
+//                   |             /    \                  |
+//                   |            /      +---------------- x receive htlc
+//                   |           /                         |
+//                   |          /                          |
+//      receive sig  x --------/-------------------------- x send commit sig
+//                   |        /                            |
+//                   |       /                             |
+//     receive htlc  x (htlc)                              |
+//                   |                                     |
+//                   v                                     v
+//                  time                                  time
+
 func TestSimpleAddSettleWorkflow(t *testing.T) {
 	// Create a test channel which will be used for the duration of this
 	// unittest. The channel will be funded evenly with Alice having 5 BTC,
@@ -364,6 +390,14 @@ func TestSimpleAddSettleWorkflow(t *testing.T) {
 		Expiry:      uint32(5),
 	}
 
+	//paymentPreimage2 := bytes.Repeat([]byte{2}, 32)
+	//paymentHash2 := fastsha256.Sum256(paymentPreimage2)
+	//htlc2 := &lnwire.UpdateAddHTLC{
+	//	PaymentHash: paymentHash2,
+	//	Amount:      btcutil.SatoshiPerBitcoin,
+	//	Expiry:      uint32(5),
+	//}
+
 	// First Alice adds the outgoing HTLC to her local channel's state
 	// update log. Then Alice sends this wire message over to Bob who also
 	// adds this htlc to his local state update log.
@@ -374,11 +408,21 @@ func TestSimpleAddSettleWorkflow(t *testing.T) {
 		t.Fatalf("unable to recv htlc: %v", err)
 	}
 
+	//if _, err := bobChannel.AddHTLC(htlc2); err != nil {
+	//	t.Fatalf("unable to add htlc: %v", err)
+	//}
+	//if _, err := aliceChannel.ReceiveHTLC(htlc2); err != nil {
+	//	t.Fatalf("unable to recv htlc: %v", err)
+	//}
+
 	// Next alice commits this change by sending a signature message.
 	aliceSig, err := aliceChannel.SignNextCommitment()
 	if err != nil {
 		t.Fatalf("alice unable to sign commitment: %v", err)
 	}
+
+	fmt.Println(aliceChannel.remoteCommitChain.tip().ourBalance)
+	fmt.Println(aliceChannel.remoteCommitChain.tip().theirBalance)
 
 	// Bob receives this signature message, revokes his prior commitment
 	// given to him by Alice,a nd then finally send a signature for Alice's
@@ -386,6 +430,10 @@ func TestSimpleAddSettleWorkflow(t *testing.T) {
 	if err := bobChannel.ReceiveNewCommitment(aliceSig); err != nil {
 		t.Fatalf("bob unable to process alice's new commitment: %v", err)
 	}
+
+	fmt.Println(bobChannel.localCommitChain.tip().ourBalance)
+	fmt.Println(bobChannel.localCommitChain.tip().theirBalance)
+
 	bobRevocation, err := bobChannel.RevokeCurrentCommitment()
 	if err != nil {
 		t.Fatalf("unable to generate bob revocation: %v", err)
@@ -415,6 +463,10 @@ func TestSimpleAddSettleWorkflow(t *testing.T) {
 		t.Fatalf("unable to revoke alice channel: %v", err)
 	}
 
+	//s := aliceChannel.StateSnapshot()
+	//s.RemoteIdentity = btcec.PublicKey{}
+	//fmt.Println(spew.Sdump(s))
+
 	// Finally Bob processes Alice's revocation, at this point the new HTLC
 	// is fully locked in within both commitment transactions. Bob should
 	// also be able to forward an HTLC now that the HTLC has been locked
@@ -429,7 +481,7 @@ func TestSimpleAddSettleWorkflow(t *testing.T) {
 	// At this point, both sides should have the proper balance, and
 	// commitment height updated within their local channel state.
 	aliceBalance := btcutil.Amount(4 * 1e8)
-	bobBalance := btcutil.Amount(5 * 1e8)
+	bobBalance := btcutil.Amount(4 * 1e8)
 	if aliceChannel.channelState.OurBalance != aliceBalance {
 		t.Fatalf("alice has incorrect local balance %v vs %v",
 			aliceChannel.channelState.OurBalance, aliceBalance)

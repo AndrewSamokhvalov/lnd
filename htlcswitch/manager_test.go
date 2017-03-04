@@ -50,7 +50,7 @@ func TestSingleHopPayment(t *testing.T) {
 	bobBandwidthBefore := c.firstBobHtlcManager.Bandwidth()
 	aliceBandwidthBefore := c.aliceHtlcManager.Bandwidth()
 
-	debug := false
+	debug := true
 	if debug {
 		// Log message that alice receives.
 		c.aliceServer.Record(createLogFunc("alice",

@@ -411,6 +411,8 @@ func (u *updateLog) remove(i uint64) {
 // of the remote party with the contents of the updateLog. This function will
 // mark the log index value at this point so it can later be marked as ACK'd.
 func (u *updateLog) initiateTransition() {
+	fmt.Println("initiate")
+
 	u.pendingAckIndex = u.logIndex
 }
 
@@ -418,6 +420,8 @@ func (u *updateLog) initiateTransition() {
 // last pending state transition has been accepted by the remote party. To do
 // so, we mark the prior pendingAckIndex as fully ACK'd.
 func (u *updateLog) ackTransition() {
+	fmt.Println("ack")
+
 	u.ackedIndex = u.pendingAckIndex
 	u.pendingAckIndex = 0
 }
@@ -1387,6 +1391,7 @@ func (lc *LightningChannel) SignNextCommitment() ([]byte, error) {
 	// HTLC log entries. When we creating a new remote view, we include
 	// _all_ of our changes (pending or committed) but only the remote
 	// node's changes up to the last change we've ACK'd.
+	fmt.Println(lc.localUpdateLog.logIndex, lc.remoteUpdateLog.ackedIndex)
 	newCommitView, err := lc.fetchCommitmentView(true, lc.localUpdateLog.logIndex,
 		lc.remoteUpdateLog.ackedIndex, remoteRevocationKey, remoteRevocationHash)
 	if err != nil {
