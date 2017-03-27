@@ -106,11 +106,15 @@ type lightningNode struct {
 	wg   sync.WaitGroup
 
 	lnrpc.LightningClient
+
+	debug bool
+	name  string
 }
 
 // newLightningNode creates a new test lightning node instance from the passed
 // rpc config and slice of extra arguments.
-func newLightningNode(rpcConfig *btcrpcclient.ConnConfig, lndArgs []string) (*lightningNode, error) {
+func newLightningNode(debug bool, name string, rpcConfig *btcrpcclient.ConnConfig,
+	lndArgs []string) (*lightningNode, error) {
 	var err error
 
 	cfg := &config{
@@ -143,6 +147,8 @@ func newLightningNode(rpcConfig *btcrpcclient.ConnConfig, lndArgs []string) (*li
 		processExit:       make(chan struct{}),
 		quit:              make(chan struct{}),
 		extraArgs:         lndArgs,
+		name:              name,
+		debug:             debug,
 	}, nil
 }
 
@@ -177,9 +183,22 @@ func (l *lightningNode) Start(lndError chan error) error {
 
 	l.cmd = exec.Command("lnd", args...)
 
-	// Redirect stderr output to buffer
 	var errb bytes.Buffer
-	l.cmd.Stderr = &errb
+	outWriters := []io.Writer{}
+	errWriters := []io.Writer{&errb}
+
+	if l.debug {
+		fileName := fmt.Sprintf("/tmp/%v.txt", l.name)
+		f, err := os.OpenFile(fileName, os.O_WRONLY|os.O_CREATE, os.ModePerm)
+		if err != nil {
+			return err
+		}
+		outWriters = append(outWriters, f, os.Stdout)
+		errWriters = append(errWriters, f, os.Stderr)
+	}
+
+	l.cmd.Stdout = io.MultiWriter(outWriters...)
+	l.cmd.Stderr = io.MultiWriter(errWriters...)
 
 	if err := l.cmd.Start(); err != nil {
 		return err
@@ -271,6 +290,8 @@ func (l *lightningNode) Stop() error {
 
 	select {
 	case <-l.processExit:
+		return nil
+	case <-l.quit:
 		return nil
 	default:
 		close(l.quit)
@@ -604,11 +625,11 @@ func (n *networkHarness) InitializeSeedNodes(r *rpctest.Harness, lndArgs []strin
 	n.rpcConfig = nodeConfig
 
 	var err error
-	n.Alice, err = newLightningNode(&nodeConfig, lndArgs)
+	n.Alice, err = newLightningNode(true, "alice", &nodeConfig, lndArgs)
 	if err != nil {
 		return err
 	}
-	n.Bob, err = newLightningNode(&nodeConfig, lndArgs)
+	n.Bob, err = newLightningNode(false, "bob", &nodeConfig, lndArgs)
 	if err != nil {
 		return err
 	}
@@ -764,11 +785,12 @@ func (n *networkHarness) TearDownAll() error {
 // NewNode fully initializes a returns a new lightningNode binded to the
 // current instance of the network harness. The created node is running, but
 // not yet connected to other nodes within the network.
-func (n *networkHarness) NewNode(extraArgs []string) (*lightningNode, error) {
+func (n *networkHarness) NewNode(name string,
+	extraArgs []string) (*lightningNode, error) {
 	n.Lock()
 	defer n.Unlock()
 
-	node, err := newLightningNode(&n.rpcConfig, extraArgs)
+	node, err := newLightningNode(false, name, &n.rpcConfig, extraArgs)
 	if err != nil {
 		return nil, err
 	}

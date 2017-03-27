@@ -982,7 +982,7 @@ func testMultiHopPayments(net *networkHarness, t *harnessTest) {
 	// identical capacity to the one created above.
 	//
 	// The network topology should now look like: Carol -> Alice -> Bob
-	carol, err := net.NewNode(nil)
+	carol, err := net.NewNode("carol", nil)
 	if err != nil {
 		t.Fatalf("unable to create new nodes: %v", err)
 	}
@@ -1296,7 +1296,7 @@ func testMaxPendingChannels(net *networkHarness, t *harnessTest) {
 	args := []string{
 		fmt.Sprintf("--maxpendingchannels=%v", maxPendingChannels),
 	}
-	carol, err := net.NewNode(args)
+	carol, err := net.NewNode("carol", args)
 	if err != nil {
 		t.Fatalf("unable to create new nodes: %v", err)
 	}
@@ -1685,7 +1685,7 @@ func testHtlcErrorPropagation(net *networkHarness, t *harnessTest) {
 
 	// Since we'd like to test some multi-hop failure scenarios, we'll
 	// introduce another node into our test network: Carol.
-	carol, err := net.NewNode(nil)
+	carol, err := net.NewNode("carol", nil)
 	if err != nil {
 		t.Fatalf("unable to create new nodes: %v", err)
 	}
@@ -2032,7 +2032,7 @@ func testGraphTopologyNotifications(net *networkHarness, t *harnessTest) {
 
 	// For the final portion of the test, we'll ensure that once a new node
 	// appears in the network, the proper notification is dispatched.
-	carol, err := net.NewNode(nil)
+	carol, err := net.NewNode("carol", nil)
 	if err != nil {
 		t.Fatalf("unable to create new nodes: %v", err)
 	}
