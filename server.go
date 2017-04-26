@@ -248,12 +248,15 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 	}
 
 	s.discoverSrv, err = discovery.New(discovery.Config{
-		Broadcast:        s.broadcastMessage,
-		Notifier:         s.chainNotifier,
-		Router:           s.chanRouter,
-		SendToPeer:       s.sendToPeer,
-		TrickleDelay:     time.Millisecond * 300,
-		ProofMatureDelta: 0,
+		Broadcast:               s.broadcastMessage,
+		Notifier:                s.chainNotifier,
+		Router:                  s.chanRouter,
+		SendToPeer:              s.sendToPeer,
+		TrickleDelay:            time.Millisecond * 300,
+		OrphanBatchCapacity:     3,
+		NumOrphanRetries:        3,
+		OrphanReprocessingDelay: time.Second,
+		ProofMatureDelta:        0,
 	})
 	if err != nil {
 		return nil, err

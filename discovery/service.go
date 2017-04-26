@@ -27,6 +27,14 @@ type waitingProofKey struct {
 	isRemote bool
 }
 
+// orphanWrapper is the structure which enhance the network message with
+// additional information needed for reprocessing logic.
+type orphanWrapper struct {
+	msg         *networkMsg
+	processTime time.Time
+	retries     uint8
+}
+
 // networkMsg couples a routing related wire message with the peer that
 // originally sent it.
 type networkMsg struct {
@@ -73,12 +81,26 @@ type Config struct {
 
 	// ProofMatureDelta the number of confirmations which is needed before
 	// exchange the channel announcement proofs.
-	ProofMatureDelta uint32
+	ProofMatureDelta uint8
 
 	// TrickleDelay the period of trickle timer which flushing to the
 	// network the pending batch of new announcements we've received since
 	// the last trickle tick.
 	TrickleDelay time.Duration
+
+	// OrphanBatchCapacity number of pending orphan announcements,
+	// corresponding to one peer, which will be stored by system and waited
+	// to be reprocessed. If number of orphan announcements will exceed this
+	// number than announcement will be rejected.
+	OrphanBatchCapacity uint8
+
+	// NumOrphanRetries number of reprocessing retries before discarding and
+	// clearing the orphan announcement.
+	NumOrphanRetries uint8
+
+	// OrphanReprocessingDelay the period of reprocessing timer which
+	// reprocessing the orphan announcement which we received by our node.
+	OrphanReprocessingDelay time.Duration
 }
 
 // New creates a new AuthenticatedGossiper instance, initialized with the
@@ -90,6 +112,7 @@ func New(cfg Config) (*AuthenticatedGossiper, error) {
 		quit:                   make(chan struct{}),
 		syncRequests:           make(chan *syncRequest),
 		prematureAnnouncements: make(map[uint32][]*networkMsg),
+		orphanSigBatch:         make(map[*btcec.PublicKey]map[uint64]*orphanWrapper),
 		waitingProofs:          make(map[waitingProofKey]*lnwire.AnnounceSignatures),
 	}, nil
 }
@@ -127,6 +150,15 @@ type AuthenticatedGossiper struct {
 	//
 	// TODO(roasbeef): limit premature networkMsgs to N
 	prematureAnnouncements map[uint32][]*networkMsg
+
+	// orphanSigBatch is used to store the information about peer and its
+	// orphan announcements.
+	//
+	// NOTE: orphan announcements - is the announcement with channel id,
+	// which is unknown to us, orphan announcement might be received in case
+	// if our subsystem isn't registered channel yet, or because someone is
+	// spamming us.
+	orphanSigBatch map[*btcec.PublicKey]map[uint64]*orphanWrapper
 
 	// waitingProofs is a map of partial channel proof announcement
 	// messages. We use this map to buffer half of the material needed to
@@ -277,6 +309,10 @@ func (d *AuthenticatedGossiper) networkHandler() {
 	trickleTimer := time.NewTicker(d.cfg.TrickleDelay)
 	defer trickleTimer.Stop()
 
+	// TODO(roasbeef): parametrize the above
+	orphanTimer := time.NewTicker(d.cfg.OrphanReprocessingDelay)
+	defer orphanTimer.Stop()
+
 	for {
 		select {
 		case announcement := <-d.networkMsgs:
@@ -415,6 +451,65 @@ func (d *AuthenticatedGossiper) networkHandler() {
 					nodePub, err)
 			}
 
+		// The orphan timer has ticked which indicates that we
+		// should reprocess all orphans announcements once again.
+		case <-orphanTimer.C:
+			if len(d.orphanSigBatch) == 0 {
+				continue
+			}
+
+			for peer, orphans := range d.orphanSigBatch {
+				// Clean up orphan batch for this peer if all
+				// orphans have been proceed.
+				if len(d.orphanSigBatch[peer]) == 0 {
+					delete(d.orphanSigBatch, peer)
+					continue
+				}
+
+				for chanID, orphan := range orphans {
+					orphan.retries++
+					anns := d.processNetworkAnnouncement(orphan.msg)
+
+					// If the announcement was accepted, then
+					// add the emitted announcements to our
+					// announce batch to be broadcast once
+					// the trickle timer ticks gain.
+					if anns != nil {
+						announcementBatch = append(
+							announcementBatch,
+							anns...,
+						)
+					}
+
+					// Check if orphan signature have been
+					// proceed and if not and number of
+					// retries have been exceed than remove
+					// orphan from reprocessing batch.
+					_, ok := d.orphanSigBatch[peer][chanID]
+					if ok && orphan.retries >= d.cfg.NumOrphanRetries {
+						log.Warnf("Orphan signature "+
+							"announcement for "+
+							"short_chan_id=%v "+
+							"exceed its maximum "+
+							"reprocessing tries",
+							chanID)
+
+						delete(d.orphanSigBatch[peer], chanID)
+						continue
+					}
+
+					delta := nextDuration(orphan.retries)
+					orphan.processTime = time.Now().Add(delta)
+
+					log.Infof("Unsuccessful retry (%v/%v) to "+
+						"process orphan proof announcement "+
+						"with short_chan_id=%v, next "+
+						"retry in %v seconds", orphan.retries,
+						d.cfg.NumOrphanRetries, chanID,
+						delta.Seconds())
+				}
+			}
+
 		// The discovery has been signalled to exit, to we exit our
 		// main loop so the wait group can be decremented.
 		case <-d.quit:
@@ -429,8 +524,8 @@ func (d *AuthenticatedGossiper) networkHandler() {
 // or redundant, then nil is returned. Otherwise, the set of announcements will
 // be returned which should be broadcasted to the rest of the network.
 func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []lnwire.Message {
-	isPremature := func(chanID lnwire.ShortChannelID, delta uint32) bool {
-		return chanID.BlockHeight+delta > d.bestHeight
+	isPremature := func(chanID lnwire.ShortChannelID, delta uint8) bool {
+		return chanID.BlockHeight+uint32(delta) > d.bestHeight
 	}
 
 	var announcements []lnwire.Message
@@ -586,8 +681,8 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 		// verify message signature.
 		chanInfo, _, _, err := d.cfg.Router.GetChannelByID(msg.ShortChannelID)
 		if err != nil {
-			err := errors.Errorf("unable to validate "+
-				"channel update short_chan_id=%v: %v",
+			err := errors.Errorf("unable to get "+
+				"channel for short_chan_id=%v: %v",
 				shortChanID, err)
 			nMsg.err <- err
 			return nil
@@ -654,7 +749,8 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 	// willingness of nodes involved in the funding of a channel to
 	// announce this new channel to the rest of the world.
 	case *lnwire.AnnounceSignatures:
-		needBlockHeight := msg.ShortChannelID.BlockHeight + d.cfg.ProofMatureDelta
+		needBlockHeight := msg.ShortChannelID.BlockHeight +
+			uint32(d.cfg.ProofMatureDelta)
 		shortChanID := msg.ShortChannelID.ToUint64()
 
 		prefix := "local"
@@ -686,11 +782,47 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 		// before proceeding further.
 		chanInfo, e1, e2, err := d.cfg.Router.GetChannelByID(msg.ShortChannelID)
 		if err != nil {
-			err := errors.Errorf("unable to process channel "+
-				"%v proof with short_chan_id=%v: %v", prefix,
-				shortChanID, err)
-			nMsg.err <- err
+			// Initialize orphan batch for this peer, if it's
+			// needed.
+			if _, ok := d.orphanSigBatch[nMsg.peer]; !ok {
+				d.orphanSigBatch[nMsg.peer] = make(map[uint64]*orphanWrapper)
+			}
+
+			// If orphan proof already have been added to the
+			// batch than do nothing, otherwise try to add it to
+			// the batch.
+			if _, ok := d.orphanSigBatch[nMsg.peer][shortChanID]; ok {
+				return nil
+			}
+
+			if uint8(len(d.orphanSigBatch[nMsg.peer])) >=
+				d.cfg.OrphanBatchCapacity {
+				err := errors.Errorf("unable to "+
+					"add handle orphan announcement: "+
+					"orphan capacity for peer=%v "+
+					"exceed its maximum", nMsg.peer)
+				log.Error(err)
+				nMsg.err <- err
+				return nil
+			}
+
+			log.Infof("Orphan %v proof announcement "+
+				"with short_chan_id=%v, have been added "+
+				"to reprocessing batch", prefix, shortChanID)
+			d.orphanSigBatch[nMsg.peer][shortChanID] = &orphanWrapper{
+				msg: nMsg, retries: 0}
+			nMsg.err <- nil
 			return nil
+
+		}
+
+		// Local announcement can't be in the orphan batch, because
+		// channel is created before local announcement will be sent.
+		// For that reason if we remove check that announcement is remote
+		// than by receiving local announcement we may accidentally
+		// delete remote orphan announcement.
+		if _, ok := d.orphanSigBatch[nMsg.peer][shortChanID]; ok && nMsg.isRemote {
+			delete(d.orphanSigBatch[nMsg.peer], shortChanID)
 		}
 
 		isFirstNode := bytes.Equal(nMsg.peer.SerializeCompressed(),
@@ -778,7 +910,6 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 			err := errors.Errorf("channel  announcement proof "+
 				"for short_chan_id=%v isn't valid: %v",
 				shortChanID, err)
-
 			log.Error(err)
 			nMsg.err <- err
 			return nil
@@ -799,6 +930,7 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 			nMsg.err <- err
 			return nil
 		}
+		delete(d.waitingProofs, oppositeKey)
 
 		// Proof was successfully created and now can announce the
 		// channel to the remain network.

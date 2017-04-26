@@ -2,6 +2,9 @@ package discovery
 
 import (
 	"encoding/binary"
+	"math"
+
+	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -133,4 +136,14 @@ func SignAnnouncement(signer lnwallet.MessageSigner, pubKey *btcec.PublicKey,
 	}
 
 	return signer.SignMessage(pubKey, data)
+}
+
+func nextDuration(retries uint8) time.Duration {
+	if retries > 9 {
+		retries = 9 // 512 second ~= 8-9 minutes
+	}
+
+	x := 2.0
+	y := float64(retries)
+	return time.Duration(math.Pow(x, y)) * time.Second
 }
