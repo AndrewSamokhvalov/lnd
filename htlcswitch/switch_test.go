@@ -295,8 +295,7 @@ func TestSwitchSendPayment(t *testing.T) {
 	}
 
 	// Handle the request and checks that bob channel link received it.
-	preimageChan, errChan := s.SendUpdate(aliceChannelLink.Peer().PubKey(),
-		update)
+	preimageChan, errChan := s.SendUpdate(aliceChannelLink.Peer().PubKey(), update)
 
 	select {
 	case <-aliceChannelLink.packets:
