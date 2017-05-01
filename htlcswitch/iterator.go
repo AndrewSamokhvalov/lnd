@@ -15,9 +15,9 @@ type hopID [ripemd160.Size]byte
 
 // newHopID creates new instance of hop form node public key.
 func newHopID(pubKey []byte) hopID {
-	var routeId hopID
-	copy(routeId[:], btcutil.Hash160(pubKey))
-	return routeId
+	var routeID hopID
+	copy(routeID[:], btcutil.Hash160(pubKey))
+	return routeID
 }
 
 // String returns string representation of hop id.
