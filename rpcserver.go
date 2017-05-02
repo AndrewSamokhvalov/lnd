@@ -19,6 +19,7 @@ import (
 	"github.com/boltdb/bolt"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -526,7 +527,7 @@ func (r *rpcServer) OpenChannelSync(ctx context.Context,
 	}
 }
 
-// CloseChannel attempts to close an active channel identified by its channel
+// CloseLink attempts to close an active channel identified by its channel
 // point. The actions of this method can additionally be augmented to attempt
 // a force close after a timeout period in the case of an inactive peer.
 func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
@@ -624,7 +625,7 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 		// the htlc switch which will handle the negotiation and
 		// broadcast details.
 		updateChan, errChan = r.server.htlcSwitch.CloseLink(chanPoint,
-			CloseRegular)
+			htlcswitch.CloseRegular)
 	}
 out:
 	for {
