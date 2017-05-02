@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -24,9 +23,11 @@ import (
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/routing"
 	"github.com/roasbeef/btcd/btcec"
-	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/connmgr"
 	"github.com/roasbeef/btcutil"
+
+	"github.com/go-errors/errors"
+	"github.com/lightningnetwork/lnd/htlcswitch"
 )
 
 // server is the main server of the Lightning Network Daemon. The server houses
@@ -67,7 +68,7 @@ type server struct {
 	fundingMgr *fundingManager
 	chanDB     *channeldb.DB
 
-	htlcSwitch    *htlcSwitch
+	htlcSwitch    *htlcswitch.Switch
 	invoices      *invoiceRegistry
 	breachArbiter *breachArbiter
 
@@ -132,7 +133,6 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 
 		invoices:    newInvoiceRegistry(chanDB),
 		utxoNursery: newUtxoNursery(chanDB, notifier, wallet),
-		htlcSwitch:  newHtlcSwitch(),
 
 		identityPriv: privKey,
 		nodeSigner:   newNodeSigner(privKey),
@@ -172,6 +172,23 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 		srvrLog.Debugf("Debug HTLC invoice inserted, preimage=%x, hash=%x",
 			debugPre[:], debugHash[:])
 	}
+
+	s.htlcSwitch = htlcswitch.New(htlcswitch.Config{
+		LocalChannelClose: func(pubKey []byte,
+			request *htlcswitch.ChanClose) {
+			s.peersMtx.RLock()
+			peer, ok := s.peersByPub[string(pubKey)]
+			s.peersMtx.RUnlock()
+
+			if !ok {
+				srvrLog.Error("unable to close channel, peer"+
+					" with %v id can't be found", pubKey)
+				return
+			}
+
+			peer.localCloseChanReqs <- request
+		},
+	})
 
 	// If external IP addresses have been specified, add those to the list
 	// of this server's addresses.
@@ -235,12 +252,8 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 			htlcAdd *lnwire.UpdateAddHTLC) ([32]byte, error) {
 
 			firstHopPub := firstHop.SerializeCompressed()
-			destInterface := chainhash.Hash(sha256.Sum256(firstHopPub))
-
-			return s.htlcSwitch.SendHTLC(&htlcPacket{
-				dest: destInterface,
-				msg:  htlcAdd,
-			})
+			preimage, err := s.htlcSwitch.SendUpdate(firstHopPub, htlcAdd)
+			return <-preimage, <-err
 		},
 	})
 	if err != nil {
@@ -647,7 +660,7 @@ func (s *server) peerTerminationWatcher(p *peer) {
 	// Tell the switch to unregister all links associated with this peer.
 	// Passing nil as the target link indicates that all
 	// links associated with this interface should be closed.
-	p.server.htlcSwitch.UnregisterLink(p.addr.IdentityKey, nil)
+	p.server.htlcSwitch.RemoveLinks(p.addr.IdentityKey.SerializeCompressed())
 
 	// Send the peer to be garbage collected by the server.
 	p.server.donePeers <- p
