@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"io"
+
 	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -22,6 +24,10 @@ import (
 // elements within the configuration MUST be non-nil for channel link to carry
 // out its duties.
 type ChannelLinkConfig struct {
+	// DecodeOnion function responsible for decoding htlc Sphinx onion blob,
+	// and creating hop iterator which will give us next destination of htlc.
+	DecodeOnion func(r io.Reader, meta []byte) (HopIterator, error)
+
 	// ForwardToSwitch is a function which is used to forward the
 	// incoming htlc packets to other peer which should handle it.
 	ForwardToSwitch func(*htlcPacket) error
