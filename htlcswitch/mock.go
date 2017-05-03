@@ -8,6 +8,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/roasbeef/btcutil"
+	"github.com/lightningnetwork/lnd/lnwallet"
 )
 
 type mockServer struct {
@@ -121,6 +122,10 @@ func (s *mockServer) PubKey() []byte {
 
 func (s *mockServer) Disconnect() {
 	s.t.Fatalf("server %v was disconnected", s.name)
+}
+
+func (s *mockServer) WipeChannel(*lnwallet.LightningChannel) error {
+	return nil
 }
 
 func (s *mockServer) Stop() {
