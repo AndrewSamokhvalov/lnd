@@ -3,9 +3,27 @@ package htlcswitch
 import (
 	"crypto/sha256"
 
+	"github.com/lightningnetwork/lnd/channeldb"
+	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcutil"
 )
+
+// InvoiceDatabase is an interface which represents the persistent subsystem
+// which may search, lookup and settle invoices.
+type InvoiceDatabase interface {
+	// AddInvoice inserts the targeted invoice into the database.
+	AddInvoice(*channeldb.Invoice) error
+
+	// LookupInvoice attempts to look up an invoice according to it's 32
+	// byte payment hash.
+	LookupInvoice(chainhash.Hash) (*channeldb.Invoice, error)
+
+	// SettleInvoice attempts to mark an invoice corresponding to the passed
+	// payment hash as fully settled.
+	SettleInvoice(chainhash.Hash) error
+}
 
 // ChannelLink is an interface which represents the subsystem for managing
 // the incoming htlc requests, applying the changes to the channel, and also
@@ -65,6 +83,10 @@ type Peer interface {
 
 	// ID returns the lightning network peer id.
 	ID() [sha256.Size]byte
+
+	// WipeChannel removes the passed channel from all indexes associated
+	// with the peer, and deletes the channel from the database.
+	WipeChannel(*lnwallet.LightningChannel) error
 
 	// PubKey returns the peer public key.
 	PubKey() []byte
