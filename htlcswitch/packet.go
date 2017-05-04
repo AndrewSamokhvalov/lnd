@@ -62,10 +62,10 @@ func newSettlePacket(src lnwire.ChannelID, htlc *lnwire.UpdateFufillHTLC,
 // newFailPacket creates htlc switch fail packet which encapsulates the fail
 // htlc request which propagated back to the original hope who sent the htlc
 // add request if something wrong happened on the path to the final destination.
-func newFailPacket(source lnwire.ChannelID, htlc *lnwire.UpdateFailHTLC,
+func newFailPacket(src lnwire.ChannelID, htlc *lnwire.UpdateFailHTLC,
 	payHash [sha256.Size]byte) *htlcPacket {
 	return &htlcPacket{
-		src:     source,
+		src:     src,
 		payHash: payHash,
 		htlc:    htlc,
 	}
