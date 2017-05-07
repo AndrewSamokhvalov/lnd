@@ -277,7 +277,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
 			// The HTLC was unable to be added to the state
 			// machine, as a result, we'll signal the switch to
 			// cancel the pending payment.
-			l.cfg.Switch.Forward(newFailPacket(l.ChanID(),
+			l.cfg.Switch.forward(newFailPacket(l.ChanID(),
 				&lnwire.UpdateFailHTLC{
 					Reason: []byte{byte(0)},
 				}, htlc.PaymentHash))
@@ -455,7 +455,7 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		htlcsToForward := l.processLockedInHtlcs(htlcs)
 		go func() {
 			for _, packet := range htlcsToForward {
-				if err := l.cfg.Switch.Forward(packet); err != nil {
+				if err := l.cfg.Switch.forward(packet); err != nil {
 					log.Errorf("channel link(%v): "+
 						"unhandled error while forwarding "+
 						"htlc packet over htlc  "+
@@ -566,7 +566,7 @@ func (l *channelLink) processLockedInHtlcs(
 		switch pd.EntryType {
 
 		case lnwallet.Settle:
-			// Forward message to switch which will decide does
+			// forward message to switch which will decide does
 			// this peer is the final destination of htlc and we
 			// should notify user about successful income or it
 			// should be propagated back to the origin peer.
@@ -579,7 +579,7 @@ func (l *channelLink) processLockedInHtlcs(
 		case lnwallet.Fail:
 			opaqueReason := l.cancelReasons[pd.ParentIndex]
 
-			// Forward message to switch which will decide does
+			// forward message to switch which will decide does
 			// this peer is the final destination of htlc and we
 			// should notify user about fail income or it
 			// should be propagated back to the origin peer.
