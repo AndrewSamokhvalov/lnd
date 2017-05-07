@@ -182,7 +182,7 @@ func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
 	// system and something wrong happened.
 	hop := newHopID(nextNode)
 	packet := newInitPacket(hop, htlc)
-	if err := s.Forward(packet); err != nil {
+	if err := s.forward(packet); err != nil {
 		payment.preimage <- zeroPreimage
 		payment.err <- err
 		return payment.preimage, payment.err
@@ -193,10 +193,10 @@ func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
 	return payment.preimage, payment.err
 }
 
-// Forward is used in order to find next channel link and apply htlc
+// forward is used in order to find next channel link and apply htlc
 // update. Also this function is used by channel links itself in order to
 // forward the update after it has been included in the channel.
-func (s *Switch) Forward(packet *htlcPacket) error {
+func (s *Switch) forward(packet *htlcPacket) error {
 	command := &forwardPacketCmd{
 		pkt: packet,
 		err: make(chan error),
