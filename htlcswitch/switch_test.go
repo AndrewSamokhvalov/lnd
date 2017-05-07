@@ -297,7 +297,7 @@ func TestSwitchSendPayment(t *testing.T) {
 	// Handle the request and checks that bob channel link received it.
 	errChan := make(chan error)
 	go func() {
-		_, err := s.SendUpdate(aliceChannelLink.Peer().PubKey(),
+		_, err := s.SendHTLC(aliceChannelLink.Peer().PubKey(),
 			update)
 		errChan <- err
 	}()

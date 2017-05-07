@@ -11,7 +11,6 @@ import (
 	"os"
 
 	"github.com/btcsuite/fastsha256"
-	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -20,6 +19,7 @@ import (
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
+	"github.com/go-errors/errors"
 )
 
 var (
@@ -360,7 +360,7 @@ func (n *threeHopNetwork) makePayment(peer Peer,
 	// Send payment and expose err channel.
 	errChan := make(chan error)
 	go func() {
-		_, err := n.aliceServer.htlcSwitch.SendUpdate(peers[0].PubKey(),
+		_, err := n.aliceServer.htlcSwitch.SendHTLC(peers[0].PubKey(),
 			htlc)
 		errChan <- err
 	}()
