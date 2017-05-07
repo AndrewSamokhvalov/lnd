@@ -59,11 +59,6 @@ const (
 	// should be attempted.
 	CloseRegular channelCloseType = iota
 
-	// CloseForce indicates that the channel should be forcefully closed.
-	// This entails the broadcast of the commitment transaction directly on
-	// chain unilaterally.
-	CloseForce
-
 	// CloseBreach indicates that a channel breach has been dtected, and
 	// the link should immediately be marked as unavailable.
 	CloseBreach
