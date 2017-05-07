@@ -254,10 +254,8 @@ func newServer(listenAddrs []string, notifier chainntnfs.ChainNotifier,
 		ChainView: chainView,
 		SendToSwitch: func(firstHop *btcec.PublicKey,
 			htlcAdd *lnwire.UpdateAddHTLC) ([32]byte, error) {
-
 			firstHopPub := firstHop.SerializeCompressed()
-			preimage, err := s.htlcSwitch.SendUpdate(firstHopPub, htlcAdd)
-			return <-preimage, <-err
+			return s.htlcSwitch.SendUpdate(firstHopPub, htlcAdd)
 		},
 	})
 	if err != nil {
