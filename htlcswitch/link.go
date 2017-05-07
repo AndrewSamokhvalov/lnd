@@ -25,9 +25,9 @@ type ChannelLinkConfig struct {
 	// and creating hop iterator which will give us next destination of htlc.
 	DecodeOnion func(r io.Reader, meta []byte) (HopIterator, error)
 
-	// ForwardToSwitch is a function which is used to forward the
-	// incoming htlc packets to other peer which should handle it.
-	ForwardToSwitch func(*htlcPacket) error
+	// Switch is a subsystem which is used to forward the incoming htlc
+	// packets to other peer which should handle it.
+	Switch *Switch
 
 	// Peer is a lightning network node with which we have the channel
 	// link opened.
@@ -277,7 +277,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
 			// The HTLC was unable to be added to the state
 			// machine, as a result, we'll signal the switch to
 			// cancel the pending payment.
-			l.cfg.ForwardToSwitch(newFailPacket(l.ChanID(),
+			l.cfg.Switch.Forward(newFailPacket(l.ChanID(),
 				&lnwire.UpdateFailHTLC{
 					Reason: []byte{byte(0)},
 				}, htlc.PaymentHash))
@@ -455,7 +455,7 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		htlcsToForward := l.processLockedInHtlcs(htlcs)
 		go func() {
 			for _, packet := range htlcsToForward {
-				if err := l.cfg.ForwardToSwitch(packet); err != nil {
+				if err := l.cfg.Switch.Forward(packet); err != nil {
 					log.Errorf("channel link(%v): "+
 						"unhandled error while forwarding "+
 						"htlc packet over htlc  "+
