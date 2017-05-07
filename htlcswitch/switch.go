@@ -143,9 +143,9 @@ func New(cfg Config) *Switch {
 	}
 }
 
-// SendUpdate is used by other subsystems which aren't belong to htlc swicth
+// SendHTLC is used by other subsystems which aren't belong to htlc swicth
 // package in order to send the htlc update.
-func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
+func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 	[sha256.Size]byte, error) {
 
 	htlc := update.(*lnwire.UpdateAddHTLC)
@@ -222,13 +222,13 @@ func (s *Switch) handleForward(command *forwardPacketCmd) {
 	s.pendingMutex.RUnlock()
 
 	if ok {
-		command.err <- s.handleStartAndEndPacket(payment, command.pkt)
+		command.err <- s.handleLocalDispatch(payment, command.pkt)
 	} else {
-		command.err <- s.handleChannelLinkPacket(command.pkt)
+		command.err <- s.handlePacketForward(command.pkt)
 	}
 }
 
-// handleStartAndEndPacket is used at the start/end of the htlc update life
+// handleLocalDispatch is used at the start/end of the htlc update life
 // cycle. At the start (1) it is used to send the htlc to the channel link
 // without creation of circuit. At the end (2) it is used to notify the user
 // about the result of his payment is it was successful or not.
@@ -241,7 +241,7 @@ func (s *Switch) handleForward(command *forwardPacketCmd) {
 //     o <-settle-- o <--settle-- o
 //   Alice         Bob         Carol
 //
-func (s *Switch) handleStartAndEndPacket(payment *pendingPayment, packet *htlcPacket) error {
+func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket) error {
 	switch htlc := packet.htlc.(type) {
 
 	// User have created the htlc update therefore we should find the
@@ -338,11 +338,11 @@ func (s *Switch) handleStartAndEndPacket(payment *pendingPayment, packet *htlcPa
 	return nil
 }
 
-// handleChannelLinkPacket is used in cases when we need forward the htlc
+// handlePacketForward is used in cases when we need forward the htlc
 // update from one channel link to another and be able to propagate the
 // settle/fail updates back. This behaviour is achieved by creation of payment
 // circuits.
-func (s *Switch) handleChannelLinkPacket(packet *htlcPacket) error {
+func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 	switch htlc := packet.htlc.(type) {
 
 	// Channel link forwarded us a new htlc, therefore we initiate the

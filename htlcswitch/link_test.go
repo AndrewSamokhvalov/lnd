@@ -304,7 +304,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 
 	// Send payment and expose err channel.
 
-	if _, err := n.carolServer.htlcSwitch.SendUpdate(peers[0].PubKey(),
+	if _, err := n.carolServer.htlcSwitch.SendHTLC(peers[0].PubKey(),
 		htlc); err == nil {
 		t.Fatal("error wasn't received")
 	}
