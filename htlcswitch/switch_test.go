@@ -295,7 +295,12 @@ func TestSwitchSendPayment(t *testing.T) {
 	}
 
 	// Handle the request and checks that bob channel link received it.
-	preimageChan, errChan := s.SendUpdate(aliceChannelLink.Peer().PubKey(), update)
+	errChan := make(chan error)
+	go func() {
+		_, err := s.SendUpdate(aliceChannelLink.Peer().PubKey(),
+			update)
+		errChan <- err
+	}()
 
 	select {
 	case <-aliceChannelLink.packets:
@@ -328,12 +333,6 @@ func TestSwitchSendPayment(t *testing.T) {
 
 	select {
 	case err := <-errChan:
-		select {
-		case <-preimageChan:
-		case <-time.After(time.Millisecond):
-			t.Fatal("preimage wasn't received")
-		}
-
 		if err.Error() != errors.New(lnwire.IncorrectValue).Error() {
 			t.Fatal("err wasn't received")
 		}

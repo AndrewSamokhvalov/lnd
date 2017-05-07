@@ -146,7 +146,7 @@ func New(cfg Config) *Switch {
 // SendUpdate is used by other subsystems which aren't belong to htlc swicth
 // package in order to send the htlc update.
 func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
-	chan [sha256.Size]byte, chan error) {
+	[sha256.Size]byte, error) {
 
 	htlc := update.(*lnwire.UpdateAddHTLC)
 
@@ -164,10 +164,8 @@ func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
 	_, ok := s.pendingPayments[htlc.ID]
 	if ok {
 		s.pendingMutex.Unlock()
-		payment.preimage <- zeroPreimage
-		payment.err <- errors.Errorf("pending payment with id (%v) "+
+		return zeroPreimage, errors.Errorf("pending payment with id (%v) "+
 			"already exist", htlc.ID)
-		return payment.preimage, payment.err
 	}
 	s.pendingPayments[htlc.ID] = payment
 	s.pendingMutex.Unlock()
@@ -178,14 +176,12 @@ func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
 	hop := newHopID(nextNode)
 	packet := newInitPacket(hop, htlc)
 	if err := s.forward(packet); err != nil {
-		payment.preimage <- zeroPreimage
-		payment.err <- err
-		return payment.preimage, payment.err
+		return zeroPreimage, err
 	}
 
 	// Returns channels so that other subsystem might wait/skip the
 	// waiting of handling of payment.
-	return payment.preimage, payment.err
+	return <-payment.preimage, <-payment.err
 }
 
 // forward is used in order to find next channel link and apply htlc

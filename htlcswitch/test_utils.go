@@ -7,12 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"errors"
-
 	"io/ioutil"
 	"os"
 
 	"github.com/btcsuite/fastsha256"
+	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -328,7 +327,7 @@ type threeHopNetwork struct {
 // * from Alice to Carol through the Bob
 // * from Alice to some another peer through the Bob
 func (n *threeHopNetwork) makePayment(peer Peer,
-	amount btcutil.Amount) (chan error, *channeldb.Invoice, error) {
+	amount btcutil.Amount) (*channeldb.Invoice, error) {
 
 	var peers []Peer
 	if !bytes.Equal(peer.PubKey(), n.bobServer.PubKey()) {
@@ -343,24 +342,35 @@ func (n *threeHopNetwork) makePayment(peer Peer,
 	// htlc add request.
 	blob, err := generateRoute(peers...)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Generate payment: invoice and htlc.
 	invoice, htlc, err := generatePayment(amount, blob)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Check who is last in the route and add invoice to server registry.
 	lastPeer := peers[len(peers)-1].(*mockServer)
 	if err := lastPeer.registry.AddInvoice(invoice); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Send payment and expose err channel.
-	_, errChan := n.aliceServer.htlcSwitch.SendUpdate(peers[0].PubKey(), htlc)
-	return errChan, invoice, nil
+	errChan := make(chan error)
+	go func() {
+		_, err := n.aliceServer.htlcSwitch.SendUpdate(peers[0].PubKey(),
+			htlc)
+		errChan <- err
+	}()
+
+	select {
+	case err := <-errChan:
+		return invoice, err
+	case <-time.After(time.Second):
+		return invoice, errors.New("htlc was no settled in time")
+	}
 }
 
 // start starts the three hop network alice,bob,carol servers.

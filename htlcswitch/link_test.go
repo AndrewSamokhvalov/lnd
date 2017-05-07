@@ -89,27 +89,16 @@ func TestChannelLinkSingleHopPayment(t *testing.T) {
 			n.firstBobChannelLink.ChanID()))
 	}
 
-	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	errChan, invoice, err := n.makePayment(n.bobServer, amount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// Wait for:
 	// * HTLC add request to be sent to bob.
 	// * alice<->bob commitment state to be updated.
 	// * settle request to be sent back from bob to alice.
 	// * alice<->bob commitment state to be updated.
 	// * user notification to be sent.
-	select {
-	case err := <-errChan:
-		if err != nil {
-			t.Fatalf("something wrong went when sending request: "+
-				"%v", err)
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("htlc was no settled in time")
+	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
+	invoice, err := n.makePayment(n.bobServer, amount)
+	if err != nil {
+		t.Fatalf("unable to make the payment: %v", err)
 	}
 
 	// Wait for Bob to receive the revocation.
@@ -165,12 +154,6 @@ func TestChannelLinkMultiHopPayment(t *testing.T) {
 			n.carolChannelLink.ChanID()))
 	}
 
-	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	errChan, invoice, err := n.makePayment(n.carolServer, amount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// Wait for:
 	// * HTLC add request to be sent from Alice to Bob.
 	// * Alice<->Bob commitment states to be updated.
@@ -181,15 +164,10 @@ func TestChannelLinkMultiHopPayment(t *testing.T) {
 	// * settle request to be sent back from Bob to Alice.
 	// * Alice<->Bob commitment states to be updated.
 	// * user notification to be sent.
-	select {
-	case err := <-errChan:
-		if err != nil {
-			t.Fatalf("something wrong went when sending request: "+
-				"%v", err)
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("htlc was no settled in time")
+	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
+	invoice, err := n.makePayment(n.carolServer, amount)
+	if err != nil {
+		t.Fatalf("unable to send payment: %v", err)
 	}
 
 	// Wait for Bob to receive the revocation.
@@ -237,27 +215,18 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 	secondBobBandwidthBefore := n.secondBobChannelLink.Bandwidth()
 	aliceBandwidthBefore := n.aliceChannelLink.Bandwidth()
 
-	var amount btcutil.Amount = 4 * btcutil.SatoshiPerBitcoin
-	errChan, invoice, err := n.makePayment(n.carolServer, amount)
-	if err != nil {
-		t.Fatalf("can't make the payment from carol to alice: %v", err)
-	}
-
 	// Wait for:
 	// * HTLC add request to be sent to from Alice to Bob.
 	// * Alice<->Bob commitment states to be updated.
 	// * Bob trying to add HTLC add request in Bob<->Carol channel.
 	// * Cancel HTLC request to be sent back from Bob to Alice.
 	// * user notification to be sent.
-	select {
-	case err := <-errChan:
-		if err == nil ||
-			err.Error() != errors.New(lnwire.InsufficientCapacity).Error() {
-			t.Fatal("error wasn't received")
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("error was no settled in time")
+	var amount btcutil.Amount = 4 * btcutil.SatoshiPerBitcoin
+	invoice, err := n.makePayment(n.carolServer, amount)
+	if err == nil {
+		t.Fatal("error haven't been received")
+	} else if err.Error() != errors.New(lnwire.InsufficientCapacity).Error() {
+		t.Fatalf("wrong error have been received: %v", err)
 	}
 
 	// Wait for Alice to receive the revocation.
@@ -334,23 +303,10 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 	}
 
 	// Send payment and expose err channel.
-	preimageChan, errChan := n.carolServer.htlcSwitch.SendUpdate(
-		peers[0].PubKey(), htlc)
 
-	select {
-	case err := <-errChan:
-		select {
-		case <-preimageChan:
-		case <-time.After(time.Millisecond):
-			t.Fatal("preimage wasn't received")
-		}
-
-		if err == nil {
-			t.Fatal("error wasn't received")
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("error was no settled in time")
+	if _, err := n.carolServer.htlcSwitch.SendUpdate(peers[0].PubKey(),
+		htlc); err == nil {
+		t.Fatal("error wasn't received")
 	}
 
 	// Wait for Alice to receive the revocation.
@@ -402,20 +358,11 @@ func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
 
 	dave := newMockServer(t, "save")
-	errChan, invoice, err := n.makePayment(dave, amount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	select {
-	case err := <-errChan:
-		if err == nil ||
-			err.Error() != errors.New(lnwire.UnknownDestination).Error() {
-			t.Fatal("error wasn't received")
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("error was no settled in time")
+	invoice, err := n.makePayment(dave, amount)
+	if err == nil {
+		t.Fatal("error haven't been received")
+	} else if err.Error() != errors.New(lnwire.UnknownDestination).Error() {
+		t.Fatalf("wrong error have been received: %v", err)
 	}
 
 	// Wait for Alice to receive the revocation.
@@ -469,20 +416,11 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 	aliceBandwidthBefore := n.aliceChannelLink.Bandwidth()
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	errChan, invoice, err := n.makePayment(n.carolServer, amount)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	select {
-	case err := <-errChan:
-		if err == nil ||
-			err.Error() != errors.New(lnwire.SphinxParseError).Error() {
-			t.Fatal("error wasn't received")
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("error was no settled in time")
+	invoice, err := n.makePayment(n.carolServer, amount)
+	if err == nil {
+		t.Fatal("error haven't been received")
+	} else if err.Error() != errors.New(lnwire.SphinxParseError).Error() {
+		t.Fatalf("wrong error have been received: %v", err)
 	}
 
 	// Wait for Bob to receive the revocation.
@@ -601,26 +539,13 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 	}
 	defer n.stop()
 
-	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	errChan, _, err := n.makePayment(n.bobServer, amount)
-	if err != nil {
-		t.Fatalf("can't make the payment form bob to alice: %v", err)
-	}
-
 	// Wait for:
 	// * htlc add htlc request to be sent to alice
 	// * alice<->bob commitment state to be updated
 	// * settle request to be sent back from alice to bob
 	// * alice<->bob commitment state to be updated
-	select {
-	case err := <-errChan:
-		if err != nil {
-			t.Fatalf("something wrong went when sending request: "+
-				"%v", err)
-		}
-		break
-	case <-time.After(time.Second):
-		t.Fatal("htlc was no settled in time")
+	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
+	if _, err := n.makePayment(n.bobServer, amount); err != nil {
+		t.Fatalf("unable to make the payment: %v", err)
 	}
-
 }
