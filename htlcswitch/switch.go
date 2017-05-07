@@ -190,7 +190,7 @@ func (s *Switch) SendUpdate(nextNode []byte, update lnwire.Message) (
 func (s *Switch) forward(packet *htlcPacket) error {
 	command := &forwardPacketCmd{
 		pkt: packet,
-		err: make(chan error),
+		err: make(chan error, 1),
 	}
 
 	select {
