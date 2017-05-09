@@ -137,8 +137,8 @@ func (m *circuitMap) remove(key circuitKey, dest lnwire.ChannelID) (
 // pending returns number of circuits which are waiting for to be completed
 // (settle/fail responses to be received)
 func (m *circuitMap) pending() int {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
 
 	var length int
 	for _, circuits := range m.circuits {
