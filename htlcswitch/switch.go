@@ -203,33 +203,6 @@ func (s *Switch) forward(packet *htlcPacket) error {
 	}
 }
 
-// handleForward handles incoming forward commands.
-func (s *Switch) handleForward(command *forwardPacketCmd) {
-	var (
-		paymentHash lnwallet.PaymentHash
-		amount      btcutil.Amount
-	)
-
-	switch m := command.pkt.htlc.(type) {
-	case *lnwire.UpdateAddHTLC:
-		paymentHash = m.PaymentHash
-		amount = m.Amount
-	case *lnwire.UpdateFufillHTLC, *lnwire.UpdateFailHTLC:
-		paymentHash = command.pkt.payHash
-		amount = command.pkt.amount
-	default:
-		command.err <- errors.New("wrong type of update")
-		return
-	}
-
-	if payment, err := s.findPayment(amount, paymentHash); err != nil {
-		command.err <- s.handlePacketForward(command.pkt)
-	} else {
-		command.err <- s.handleLocalDispatch(payment, command.pkt)
-
-	}
-}
-
 // handleLocalDispatch is used at the start/end of the htlc update life
 // cycle. At the start (1) it is used to send the htlc to the channel link
 // without creation of circuit. At the end (2) it is used to notify the user
@@ -562,7 +535,27 @@ func (s *Switch) startHandling() {
 			s.handleChanelClose(req)
 
 		case cmd := <-s.forwardCommands:
-			s.handleForward(cmd)
+			var paymentHash lnwallet.PaymentHash
+			var amount btcutil.Amount
+
+			switch m := cmd.pkt.htlc.(type) {
+			case *lnwire.UpdateAddHTLC:
+				paymentHash = m.PaymentHash
+				amount = m.Amount
+			case *lnwire.UpdateFufillHTLC, *lnwire.UpdateFailHTLC:
+				paymentHash = cmd.pkt.payHash
+				amount = cmd.pkt.amount
+			default:
+				cmd.err <- errors.New("wrong type of update")
+				return
+			}
+
+			payment, err := s.findPayment(amount, paymentHash)
+			if err != nil {
+				cmd.err <- s.handlePacketForward(cmd.pkt)
+			} else {
+				cmd.err <- s.handleLocalDispatch(payment, cmd.pkt)
+			}
 
 		case <-time.Tick(10 * time.Second):
 			var overallNumUpdates uint64
