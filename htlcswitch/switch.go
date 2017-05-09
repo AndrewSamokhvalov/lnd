@@ -619,7 +619,7 @@ func (s *Switch) Stop() error {
 	s.mutex.Lock()
 	for _, link := range s.links {
 		delete(s.links, link.ChanID())
-		link.Stop()
+		go link.Stop()
 		log.Infof("Remove channel link with ChannelID(%v)", link.ChanID())
 	}
 	s.mutex.Unlock()
@@ -670,7 +670,7 @@ func (s *Switch) RemoveLink(chanID lnwire.ChannelID) error {
 	}
 
 	delete(s.links, link.ChanID())
-	link.Stop()
+	go link.Stop()
 	log.Infof("Remove channel link with ChannelID(%v)", link.ChanID())
 
 	return nil
@@ -694,7 +694,7 @@ func (s *Switch) RemoveLinks(pubKey []byte) error {
 
 	for _, link := range links {
 		delete(s.links, link.ChanID())
-		link.Stop()
+		go link.Stop()
 		log.Infof("Remove channel link with ChannelID(%v)", link.ChanID())
 	}
 
