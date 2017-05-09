@@ -13,9 +13,6 @@ import (
 // InvoiceDatabase is an interface which represents the persistent subsystem
 // which may search, lookup and settle invoices.
 type InvoiceDatabase interface {
-	// AddInvoice inserts the targeted invoice into the database.
-	AddInvoice(*channeldb.Invoice) error
-
 	// LookupInvoice attempts to look up an invoice according to it's 32
 	// byte payment hash.
 	LookupInvoice(chainhash.Hash) (*channeldb.Invoice, error)
