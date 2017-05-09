@@ -142,7 +142,7 @@ func New(cfg Config) *Switch {
 	}
 }
 
-// SendHTLC is used by other subsystems which aren't belong to htlc swicth
+// SendHTLC is used by other subsystems which aren't belong to htlc switch
 // package in order to send the htlc update.
 func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 	[sha256.Size]byte, error) {
@@ -483,7 +483,7 @@ func (s *Switch) CloseLink(chanPoint *wire.OutPoint,
 
 	case <-s.quit:
 		errChan <- errors.New("unable close channel link, htlc " +
-			"swicth already stopped")
+			"switch already stopped")
 		close(updateChan)
 		return updateChan, errChan
 	}
