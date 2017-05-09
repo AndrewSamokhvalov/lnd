@@ -260,25 +260,12 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 	// We've just received a settle update which means we can finalize
 	// the user payment and return successful response.
 	case *lnwire.UpdateFufillHTLC:
-		source, err := s.GetLink(packet.src)
-		if err != nil {
-			err := errors.Errorf("unable to find source channel "+
-				"link by ChannelID(%v): %v", packet.src, err)
-			log.Error(err)
-			return err
-		}
-		source.(*boundedLinkChan).restoreSlot()
-
 		// Notify the user that his payment was
 		// successfully proceed.
 		payment.err <- nil
 		payment.preimage <- htlc.PaymentPreimage
-
 		s.removePendingPayment(payment.amount, payment.paymentHash)
 
-	// We've just received a fail update which means we can finalize
-	// the user payment and return fail response.
-	case *lnwire.UpdateFailHTLC:
 		source, err := s.GetLink(packet.src)
 		if err != nil {
 			err := errors.Errorf("unable to find source channel "+
@@ -288,19 +275,31 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		}
 		source.(*boundedLinkChan).restoreSlot()
 
+	// We've just received a fail update which means we can finalize
+	// the user payment and return fail response.
+	case *lnwire.UpdateFailHTLC:
 		// Retrieving the fail code from byte representation of error.
-		code, err := htlc.Reason.ToFailCode()
-		if err != nil {
-			return errors.Errorf("can't decode fail code id(%v)"+
-				":%v", htlc.ID, err)
+		var userErr error
+		if code, err := htlc.Reason.ToFailCode(); err != nil {
+			userErr = errors.Errorf("can't decode fail code id"+
+				"(%v): %v", htlc.ID, err)
+		} else {
+			userErr = errors.New(code)
 		}
 
 		// Notify user that his payment was discarded.
-		var zeroPreimage [32]byte
-		payment.err <- errors.New(code)
+		payment.err <- userErr
 		payment.preimage <- zeroPreimage
-
 		s.removePendingPayment(payment.amount, payment.paymentHash)
+
+		source, err := s.GetLink(packet.src)
+		if err != nil {
+			err := errors.Errorf("unable to find source channel "+
+				"link by ChannelID(%v): %v", packet.src, err)
+			log.Error(err)
+			return err
+		}
+		source.(*boundedLinkChan).restoreSlot()
 
 	default:
 		return errors.New("wrong update type")
