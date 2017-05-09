@@ -53,6 +53,7 @@ func TestSwitchForward(t *testing.T) {
 		newHopID(bobChannelLink.Peer().PubKey()),
 		&lnwire.UpdateAddHTLC{
 			PaymentHash: rhash,
+			Amount:      1,
 		},
 	)
 
@@ -80,8 +81,7 @@ func TestSwitchForward(t *testing.T) {
 		&lnwire.UpdateFufillHTLC{
 			PaymentPreimage: preimage,
 		},
-		rhash,
-	)
+		rhash, 1)
 
 	// Handle the request and checks that payment circuit works properly.
 	if err := s.forward(packet); err != nil {
@@ -129,6 +129,7 @@ func TestSwitchCancel(t *testing.T) {
 		newHopID(bobChannelLink.Peer().PubKey()),
 		&lnwire.UpdateAddHTLC{
 			PaymentHash: rhash,
+			Amount:      1,
 		},
 	)
 
@@ -154,8 +155,7 @@ func TestSwitchCancel(t *testing.T) {
 	request = newFailPacket(
 		bobChannelLink.ChanID(),
 		&lnwire.UpdateFailHTLC{},
-		rhash,
-	)
+		rhash, 1)
 
 	// Handle the request and checks that payment circuit works properly.
 	if err := s.forward(request); err != nil {
@@ -203,6 +203,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 		newHopID(bobChannelLink.Peer().PubKey()),
 		&lnwire.UpdateAddHTLC{
 			PaymentHash: rhash,
+			Amount:      1,
 		},
 	)
 
@@ -237,8 +238,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	request = newFailPacket(
 		bobChannelLink.ChanID(),
 		&lnwire.UpdateFailHTLC{},
-		rhash,
-	)
+		rhash, 1)
 
 	// Handle the request and checks that payment circuit works properly.
 	if err := s.forward(request); err != nil {
@@ -291,7 +291,7 @@ func TestSwitchSendPayment(t *testing.T) {
 	rhash := fastsha256.Sum256(preimage[:])
 	update := &lnwire.UpdateAddHTLC{
 		PaymentHash: rhash,
-		ID:          1,
+		Amount:      1,
 	}
 
 	// Handle the request and checks that bob channel link received it.
@@ -325,7 +325,7 @@ func TestSwitchSendPayment(t *testing.T) {
 			Reason: []byte{byte(lnwire.IncorrectValue)},
 			ID:     1,
 		},
-		rhash)
+		rhash, 1)
 
 	if err := s.forward(packet); err != nil {
 		t.Fatalf("can't forward htlc packet: %v", err)

@@ -280,7 +280,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
 			l.cfg.Switch.forward(newFailPacket(l.ChanID(),
 				&lnwire.UpdateFailHTLC{
 					Reason: []byte{byte(0)},
-				}, htlc.PaymentHash))
+				}, htlc.PaymentHash, htlc.Amount))
 
 			log.Errorf("adding HTLC rejected: %v", err)
 			return
@@ -574,7 +574,7 @@ func (l *channelLink) processLockedInHtlcs(
 				newSettlePacket(l.ChanID(),
 					&lnwire.UpdateFufillHTLC{
 						PaymentPreimage: pd.RPreimage,
-					}, pd.RHash))
+					}, pd.RHash, pd.Amount))
 
 		case lnwallet.Fail:
 			opaqueReason := l.cancelReasons[pd.ParentIndex]
@@ -588,7 +588,7 @@ func (l *channelLink) processLockedInHtlcs(
 					&lnwire.UpdateFailHTLC{
 						Reason: opaqueReason,
 						ChanID: l.ChanID(),
-					}, pd.RHash))
+					}, pd.RHash, pd.Amount))
 
 		case lnwallet.Add:
 			blob := l.blobs[pd.Index]
