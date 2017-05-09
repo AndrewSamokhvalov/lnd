@@ -49,14 +49,14 @@ type forwardPacketCmd struct {
 	err chan error
 }
 
-// channelCloseType is a enum which signals the type of channel closure the
+// ChannelCloseType is a enum which signals the type of channel closure the
 // peer should execute.
-type channelCloseType uint8
+type ChannelCloseType uint8
 
 const (
 	// CloseRegular indicates a regular cooperative channel closure
 	// should be attempted.
-	CloseRegular channelCloseType = iota
+	CloseRegular ChannelCloseType = iota
 
 	// CloseBreach indicates that a channel breach has been dtected, and
 	// the link should immediately be marked as unavailable.
@@ -68,7 +68,7 @@ const (
 type ChanClose struct {
 	// CloseType is a variable which signals the type of channel closure the
 	// peer should execute.
-	CloseType channelCloseType
+	CloseType ChannelCloseType
 
 	// ChanPoint represent the id of the channel which should be closed.
 	ChanPoint *wire.OutPoint
@@ -464,7 +464,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 
 // CloseLink creates and sends the the close channel command.
 func (s *Switch) CloseLink(chanPoint *wire.OutPoint,
-	closeType channelCloseType) (chan *lnrpc.CloseStatusUpdate, chan error) {
+	closeType ChannelCloseType) (chan *lnrpc.CloseStatusUpdate, chan error) {
 
 	// TODO(roasbeef) abstract out the close updates.
 	updateChan := make(chan *lnrpc.CloseStatusUpdate, 1)
