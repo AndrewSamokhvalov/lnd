@@ -27,7 +27,7 @@ type mockServer struct {
 	messages    chan lnwire.Message
 	quit        chan bool
 	id          []byte
-	registry    InvoiceDatabase
+	registry    *mockInvoiceRegistry
 	htlcSwitch  *Switch
 	wg          sync.WaitGroup
 	recordFuncs []func(lnwire.Message)
