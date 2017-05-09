@@ -578,10 +578,10 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 			// TODO(roasbeef): actually get the active channel
 			// instead too?
 			//  * so only need to grab from database
-			wipeChannel(peer, channel)
+			peer.WipeChannel(channel)
 		} else {
 			chanID := lnwire.NewChanIDFromOutPoint(channel.ChannelPoint())
-			r.server.htlcSwitch.UnregisterLink(remotePub, &chanID)
+			r.server.htlcSwitch.RemoveLink(chanID)
 		}
 
 		r.server.breachArbiter.settledContracts <- chanPoint
