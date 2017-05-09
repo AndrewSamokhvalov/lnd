@@ -122,11 +122,11 @@ var _ ChannelLink = (*channelLink)(nil)
 // NOTE: Part of the ChannelLink interface.
 func (l *channelLink) Start() error {
 	if !atomic.CompareAndSwapInt32(&l.started, 0, 1) {
-		log.Warn("channel link(%v): already started", l)
+		log.Warnf("channel link(%v): already started", l)
 		return nil
 	}
 
-	log.Info("channel link(%v): starting", l)
+	log.Infof("channel link(%v): starting", l)
 
 	l.wg.Add(1)
 	go l.htlcHandler()
@@ -139,13 +139,14 @@ func (l *channelLink) Start() error {
 // NOTE: Part of the ChannelLink interface.
 func (l *channelLink) Stop() {
 	if !atomic.CompareAndSwapInt32(&l.shutdown, 0, 1) {
-		log.Warn("channel link(%v): already stopped", l)
+		log.Warnf("channel link(%v): already stopped", l)
 		return
 	}
 
-	log.Info("channel link(%v): stopping", l)
+	log.Infof("channel link(%v): stopping", l)
 
 	close(l.quit)
+	l.wg.Wait()
 }
 
 // htlcHandler is the primary goroutine which drives a channel's commitment
@@ -158,6 +159,8 @@ func (l *channelLink) Stop() {
 // window, and also the htlc trickle queue+timer for this active channels.
 // NOTE: Should be started as goroutine.
 func (l *channelLink) htlcHandler() {
+	defer l.wg.Done()
+
 	log.Infof("HTLC manager for ChannelPoint(%v) started, "+
 		"bandwidth=%v",
 		l.channel.ChannelPoint(), l.Bandwidth())
@@ -252,8 +255,7 @@ out:
 		}
 	}
 
-	l.wg.Done()
-	log.Tracef("htlcManager for peer %v done", l)
+	log.Infof("channel link(%v): htlc handler closed", l)
 }
 
 // handleDownStreamPkt processes an HTLC packet sent from the downstream HTLC
@@ -527,7 +529,7 @@ func (l *channelLink) Stats() (uint64, btcutil.Amount, btcutil.Amount) {
 // String returns the string representation of channel link.
 // NOTE: Part of the ChannelLink interface.
 func (l *channelLink) String() string {
-	return l.ChanID().String()
+	return l.channel.ChannelPoint().String()
 }
 
 // HandleSwitchPacket handles the switch packets. This packets which might
