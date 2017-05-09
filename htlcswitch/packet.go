@@ -60,7 +60,7 @@ func newSettlePacket(src lnwire.ChannelID, htlc *lnwire.UpdateFufillHTLC,
 		src:     src,
 		payHash: payHash,
 		htlc:    htlc,
-		amount: amount,
+		amount:  amount,
 	}
 }
 
@@ -73,6 +73,6 @@ func newFailPacket(src lnwire.ChannelID, htlc *lnwire.UpdateFailHTLC,
 		src:     src,
 		payHash: payHash,
 		htlc:    htlc,
-		amount: amount,
+		amount:  amount,
 	}
 }
