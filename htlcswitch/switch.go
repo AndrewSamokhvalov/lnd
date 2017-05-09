@@ -493,6 +493,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 func (s *Switch) CloseLink(chanPoint *wire.OutPoint,
 	closeType channelCloseType) (chan *lnrpc.CloseStatusUpdate, chan error) {
 
+	// TODO(roasbeef) abstract out the close updates.
 	updateChan := make(chan *lnrpc.CloseStatusUpdate, 1)
 	errChan := make(chan error, 1)
 
