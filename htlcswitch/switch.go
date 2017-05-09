@@ -35,12 +35,11 @@ const numSlots = lnwallet.MaxHTLCNumber - 5
 // updates to be received whether the payment has been rejected or proceed
 // successfully.
 type pendingPayment struct {
-	// TODO(andrew.shvv) use payment hash instead after implementing sphinx
-	// payment.
-	index uint64
+	paymentHash lnwallet.PaymentHash
+	amount      btcutil.Amount
 
-	err      chan error
 	preimage chan [sha256.Size]byte
+	err      chan error
 }
 
 // forwardPacketCmd encapsulates switch packet and adds error channel to
@@ -110,7 +109,7 @@ type Switch struct {
 	// pendingPayments is correspondence of user payments and its hashes,
 	// which is used to save the payments which made by user and notify
 	// them about result later.
-	pendingPayments map[uint64]*pendingPayment
+	pendingPayments map[lnwallet.PaymentHash][]*pendingPayment
 	pendingMutex    sync.RWMutex
 
 	// circuits is storage for payment circuits which are used to
@@ -136,7 +135,7 @@ func New(cfg Config) *Switch {
 		cfg:               &cfg,
 		circuits:          newCircuitMap(),
 		links:             make(map[lnwire.ChannelID]*boundedLinkChan),
-		pendingPayments:   make(map[uint64]*pendingPayment),
+		pendingPayments:   make(map[lnwallet.PaymentHash][]*pendingPayment),
 		forwardCommands:   make(chan *forwardPacketCmd),
 		chanCloseRequests: make(chan *ChanClose),
 		quit:              make(chan struct{}),
@@ -153,21 +152,23 @@ func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 	// Create payment and add to the map of payment in order later to be
 	// able to retrieve it and return response to the user.
 	payment := &pendingPayment{
-		err:      make(chan error, 1),
-		preimage: make(chan [sha256.Size]byte, 1),
-		index:    htlc.ID,
+		err:         make(chan error, 1),
+		preimage:    make(chan [sha256.Size]byte, 1),
+		paymentHash: htlc.PaymentHash,
+		amount:      htlc.Amount,
 	}
 
 	// Check that we do not have the payment with the same id in order to
 	// prevent map override.
 	s.pendingMutex.Lock()
-	_, ok := s.pendingPayments[htlc.ID]
+	_, ok := s.pendingPayments[htlc.PaymentHash]
 	if ok {
 		s.pendingMutex.Unlock()
 		return zeroPreimage, errors.Errorf("pending payment with id (%v) "+
 			"already exist", htlc.ID)
 	}
-	s.pendingPayments[htlc.ID] = payment
+	s.pendingPayments[htlc.PaymentHash] = append(
+		s.pendingPayments[htlc.PaymentHash], payment)
 	s.pendingMutex.Unlock()
 
 	// Generate and send new update packet, if error will be received
@@ -176,6 +177,7 @@ func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 	hop := newHopID(nextNode)
 	packet := newInitPacket(hop, htlc)
 	if err := s.forward(packet); err != nil {
+		s.removePendingPayment(payment.amount, payment.paymentHash)
 		return zeroPreimage, err
 	}
 
@@ -203,28 +205,28 @@ func (s *Switch) forward(packet *htlcPacket) error {
 
 // handleForward handles incoming forward commands.
 func (s *Switch) handleForward(command *forwardPacketCmd) {
-	var index uint64
+	var (
+		paymentHash lnwallet.PaymentHash
+		amount      btcutil.Amount
+	)
 
 	switch m := command.pkt.htlc.(type) {
 	case *lnwire.UpdateAddHTLC:
-		index = m.ID
-	case *lnwire.UpdateFufillHTLC:
-		index = m.ID
-	case *lnwire.UpdateFailHTLC:
-		index = m.ID
+		paymentHash = m.PaymentHash
+		amount = m.Amount
+	case *lnwire.UpdateFufillHTLC, *lnwire.UpdateFailHTLC:
+		paymentHash = command.pkt.payHash
+		amount = command.pkt.amount
 	default:
 		command.err <- errors.New("wrong type of update")
 		return
 	}
 
-	s.pendingMutex.RLock()
-	payment, ok := s.pendingPayments[index]
-	s.pendingMutex.RUnlock()
-
-	if ok {
-		command.err <- s.handleLocalDispatch(payment, command.pkt)
-	} else {
+	if payment, err := s.findPayment(amount, paymentHash); err != nil {
 		command.err <- s.handlePacketForward(command.pkt)
+	} else {
+		command.err <- s.handleLocalDispatch(payment, command.pkt)
+
 	}
 }
 
@@ -299,9 +301,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		payment.err <- nil
 		payment.preimage <- htlc.PaymentPreimage
 
-		s.pendingMutex.Lock()
-		delete(s.pendingPayments, payment.index)
-		s.pendingMutex.Unlock()
+		s.removePendingPayment(payment.amount, payment.paymentHash)
 
 	// We've just received a fail update which means we can finalize
 	// the user payment and return fail response.
@@ -327,9 +327,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		payment.err <- errors.New(code)
 		payment.preimage <- zeroPreimage
 
-		s.pendingMutex.Lock()
-		delete(s.pendingPayments, payment.index)
-		s.pendingMutex.Unlock()
+		s.removePendingPayment(payment.amount, payment.paymentHash)
 
 	default:
 		return errors.New("wrong update type")
@@ -369,7 +367,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				&lnwire.UpdateFailHTLC{
 					Reason: reason,
 				},
-				htlc.PaymentHash,
+				htlc.PaymentHash, 0,
 			))
 			err := errors.Errorf("unable to find links with "+
 				"destination %v", err)
@@ -401,6 +399,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					Reason: reason,
 				},
 				htlc.PaymentHash,
+				0,
 			))
 
 			err := errors.Errorf("unable to find appropriate "+
@@ -425,6 +424,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 					Reason: reason,
 				},
 				htlc.PaymentHash,
+				0,
 			))
 			err := errors.Errorf("unable to add circuit: "+
 				"%v", err)
@@ -725,4 +725,53 @@ func (s *Switch) getLinks(destination hopID) ([]ChannelLink, error) {
 			"destination hop id %v", destination)
 	}
 	return result, nil
+}
+
+// removePendingPayment is the helper function which removes the pending user
+// payment.
+func (s *Switch) removePendingPayment(amount btcutil.Amount,
+	hash lnwallet.PaymentHash) error {
+	s.pendingMutex.Lock()
+	defer s.pendingMutex.Unlock()
+
+	payments, ok := s.pendingPayments[hash]
+	if ok {
+		for i, payment := range payments {
+			if payment.amount == amount {
+				// Delete without preserving order
+				// Google: Golang slice tricks
+				payments[i] = payments[len(payments)-1]
+				payments[len(payments)-1] = nil
+				s.pendingPayments[hash] = payments[:len(payments)-1]
+
+				if len(s.pendingPayments[hash]) == 0 {
+					delete(s.pendingPayments, hash)
+				}
+
+				return nil
+			}
+		}
+	}
+
+	return errors.Errorf("unable to remove pending payment with "+
+		"hash(%v) and amount(%v)", hash, amount)
+}
+
+// findPayment is the helper function which find the payment.
+func (s *Switch) findPayment(amount btcutil.Amount,
+	hash lnwallet.PaymentHash) (*pendingPayment, error) {
+	s.pendingMutex.RLock()
+	defer s.pendingMutex.RUnlock()
+
+	payments, ok := s.pendingPayments[hash]
+	if ok {
+		for _, payment := range payments {
+			if payment.amount == amount {
+				return payment, nil
+			}
+		}
+	}
+
+	return nil, errors.Errorf("unable to remove pending payment with "+
+		"hash(%v) and amount(%v)", hash, amount)
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/roasbeef/btcutil"
 )
 
 // htlcPacket is a wrapper around htlc lnwire update, which adds additional
@@ -23,6 +24,9 @@ type htlcPacket struct {
 
 	// htlc lnwire message type of which depends on switch request type.
 	htlc lnwire.Message
+
+	// TODO(andrew.shvv) should be removed after introducing sphinx payment.
+	amount btcutil.Amount
 }
 
 // newInitPacket creates htlc switch add packet which encapsulates the
@@ -51,11 +55,12 @@ func newAddPacket(src lnwire.ChannelID, dest hopID,
 // settle htlc request which should be created and sent back by last hope in
 // htlc path.
 func newSettlePacket(src lnwire.ChannelID, htlc *lnwire.UpdateFufillHTLC,
-	payHash [sha256.Size]byte) *htlcPacket {
+	payHash [sha256.Size]byte, amount btcutil.Amount) *htlcPacket {
 	return &htlcPacket{
 		src:     src,
 		payHash: payHash,
 		htlc:    htlc,
+		amount: amount,
 	}
 }
 
@@ -63,10 +68,11 @@ func newSettlePacket(src lnwire.ChannelID, htlc *lnwire.UpdateFufillHTLC,
 // htlc request which propagated back to the original hope who sent the htlc
 // add request if something wrong happened on the path to the final destination.
 func newFailPacket(src lnwire.ChannelID, htlc *lnwire.UpdateFailHTLC,
-	payHash [sha256.Size]byte) *htlcPacket {
+	payHash [sha256.Size]byte, amount btcutil.Amount) *htlcPacket {
 	return &htlcPacket{
 		src:     src,
 		payHash: payHash,
 		htlc:    htlc,
+		amount: amount,
 	}
 }
