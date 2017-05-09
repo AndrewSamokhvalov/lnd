@@ -574,10 +574,10 @@ func (r *rpcServer) CloseChannel(in *lnrpc.CloseChannelRequest,
 		// then we'll also purge all of its indexes.
 		remotePub := &channel.StateSnapshot().RemoteIdentity
 		if peer, err := r.server.findPeer(remotePub); err == nil {
-			wipeChannel(peer, channel)
+			peer.WipeChannel(channel)
 		} else {
 			chanID := lnwire.NewChanIDFromOutPoint(channel.ChannelPoint())
-			r.server.htlcSwitch.UnregisterLink(remotePub, &chanID)
+			r.server.htlcSwitch.RemoveLink(chanID)
 		}
 
 		r.server.breachArbiter.settledContracts <- chanPoint

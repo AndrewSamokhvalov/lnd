@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/go-errors/errors"
+	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -27,6 +28,7 @@ import (
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcd/connmgr"
 	"github.com/roasbeef/btcd/txscript"
+	"github.com/roasbeef/btcd/wire"
 )
 
 var (
@@ -882,9 +884,9 @@ func (p *peer) handleLocalClose(req *htlcswitch.ChanClose) {
 	// Once we've completed the cooperative channel closure, we'll wipe the
 	// channel so we reject any incoming forward or payment requests via
 	// this channel.
-	p.server.breachArbiter.settledContracts <- req.chanPoint
-	if err := wipeChannel(p, channel); err != nil {
-		req.err <- err
+	p.server.breachArbiter.settledContracts <- req.ChanPoint
+	if err := p.WipeChannel(channel); err != nil {
+		req.Err <- err
 		return
 	}
 
@@ -892,7 +894,7 @@ func (p *peer) handleLocalClose(req *htlcswitch.ChanClose) {
 	// closed within the database.
 	chanInfo := channel.StateSnapshot()
 	closeSummary := &channeldb.ChannelCloseSummary{
-		ChanPoint:   *req.chanPoint,
+		ChanPoint:   *req.ChanPoint,
 		ClosingTXID: *closingTxid,
 		RemotePub:   &chanInfo.RemoteIdentity,
 		Capacity:    chanInfo.Capacity,
@@ -901,7 +903,7 @@ func (p *peer) handleLocalClose(req *htlcswitch.ChanClose) {
 		IsPending:   true,
 	}
 	if err := channel.DeleteState(closeSummary); err != nil {
-		req.err <- err
+		req.Err <- err
 		return
 	}
 
@@ -917,7 +919,7 @@ func (p *peer) handleLocalClose(req *htlcswitch.ChanClose) {
 
 	_, bestHeight, err := p.server.bio.GetBestBlock()
 	if err != nil {
-		req.err <- err
+		req.Err <- err
 		return
 	}
 
