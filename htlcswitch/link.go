@@ -213,8 +213,7 @@ out:
 			// update in some time, check to see if we have any
 			// pending updates we need to commit due to our
 			// commitment chains being desynchronized.
-			if l.channel.FullySynced() &&
-				len(l.blobs) == 0 {
+			if l.channel.FullySynced() {
 				continue
 			}
 
