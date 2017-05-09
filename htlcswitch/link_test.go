@@ -468,6 +468,7 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 		aliceOrder = append(aliceOrder, &lnwire.RevokeAndAck{})
 	}
 
+	// The order in which Alice receives wire messages.
 	aliceOrder = append(aliceOrder, []lnwire.Message{
 		&lnwire.RevokeAndAck{},
 		&lnwire.CommitSig{},
@@ -483,6 +484,7 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 		bobOrder = append(bobOrder, &lnwire.RevokeAndAck{})
 	}
 
+	// The order in which Bob receives wire messages.
 	bobOrder = append(bobOrder, []lnwire.Message{
 		&lnwire.UpdateAddHTLC{},
 		&lnwire.CommitSig{},
