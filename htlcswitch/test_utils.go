@@ -416,7 +416,8 @@ func (n *threeHopNetwork) stop() {
 // alice                   first bob    second bob              carol
 // channel link	    	  channel link   channel link		channel link
 //
-func newThreeHopNetwork(t *testing.T) *threeHopNetwork {
+func newThreeHopNetwork(t *testing.T, aliceToBob,
+	bobToCarol btcutil.Amount) *threeHopNetwork {
 	var err error
 
 	// Create three peers/servers.
@@ -430,19 +431,13 @@ func newThreeHopNetwork(t *testing.T) *threeHopNetwork {
 
 	// Create lightning channels between Alice<->Bob and Bob<->Carol
 	aliceChannel, firstBobChannel, fCleanUp, err := createTestChannel(
-		alicePrivKey, bobPrivKey,
-		btcutil.Amount(btcutil.SatoshiPerBitcoin*3),
-		btcutil.Amount(btcutil.SatoshiPerBitcoin*3),
-	)
+		alicePrivKey, bobPrivKey, aliceToBob, aliceToBob)
 	if err != nil {
 		t.Fatalf("can't create alice<->bob channel: %v", err)
 	}
 
 	secondBobChannel, carolChannel, sCleanUp, err := createTestChannel(
-		bobPrivKey, carolPrivKey,
-		btcutil.Amount(btcutil.SatoshiPerBitcoin*5),
-		btcutil.Amount(btcutil.SatoshiPerBitcoin*5),
-	)
+		bobPrivKey, carolPrivKey, bobToCarol, bobToCarol)
 	if err != nil {
 		t.Fatalf("can't create bob<->carol channel: %v", err)
 	}

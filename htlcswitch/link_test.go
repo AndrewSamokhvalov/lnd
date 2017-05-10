@@ -69,7 +69,10 @@ func createLogFunc(name string, channelID lnwire.ChannelID) messageInterceptor {
 // TestChannelLinkSingleHopPayment in this test we checks the interaction
 // between Alice and Bob within scope of one channel.
 func TestChannelLinkSingleHopPayment(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 	if err := n.start(); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +127,10 @@ func TestChannelLinkSingleHopPayment(t *testing.T) {
 // (Carol -> Bob -> Alice) and checking that HTLC was settled properly and
 // balances were changed in two channels.
 func TestChannelLinkMultiHopPayment(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 	if err := n.start(); err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +210,10 @@ func TestChannelLinkMultiHopPayment(t *testing.T) {
 // bob<->alice channel has insufficient BTC capacity/bandwidth. In this test we
 // send the payment from Carol to Alice over Bob peer. (Carol -> Bob -> Alice)
 func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 	if err := n.start(); err != nil {
 		t.Fatalf("can't start three hop network: %v", err)
 	}
@@ -263,7 +272,10 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 // TestChannelLinkMultiHopUnknownPaymentHash checks that we receive remote error
 // from Alice if she received not suitable payment hash for htlc.
 func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 	if err := n.start(); err != nil {
 		t.Fatalf("can't start three hop network: %v", err)
 	}
@@ -344,7 +356,10 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 // has no idea about next hop (hop might goes down and routing info not updated
 // yet)
 func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 	if err := n.start(); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +413,10 @@ func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
 // TestChannelLinkMultiHopDecodeError checks that we send HTLC cancel if
 // decoding of onion blob failed.
 func TestChannelLinkMultiHopDecodeError(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 	if err := n.start(); err != nil {
 		t.Fatalf("can't start three hop network: %v", err)
 	}
@@ -457,7 +475,10 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 // flying around between Alice and Bob are correct when Bob sends payments to
 // Alice.
 func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
-	n := newThreeHopNetwork(t)
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
 
 	chanPoint := n.aliceChannelLink.ChanID()
 
