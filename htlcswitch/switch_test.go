@@ -24,7 +24,7 @@ var (
 	chanID2 = lnwire.NewChanIDFromOutPoint(chanPoint2)
 )
 
-// TestSwitchForward checks the ability o htlc switch to forward add/settle
+// TestSwitchForward checks the ability of htlc switch to forward add/settle
 // requests.
 func TestSwitchForward(t *testing.T) {
 	var packet *htlcPacket

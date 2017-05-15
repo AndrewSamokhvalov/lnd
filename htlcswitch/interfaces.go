@@ -82,7 +82,7 @@ type Peer interface {
 	ID() [sha256.Size]byte
 
 	// WipeChannel removes the passed channel from all indexes associated
-	// with the peer, and deletes the channel from the database.
+	// with the peer.
 	WipeChannel(*lnwallet.LightningChannel) error
 
 	// PubKey returns the peer public key.
