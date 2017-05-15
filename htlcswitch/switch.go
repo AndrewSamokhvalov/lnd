@@ -161,12 +161,6 @@ func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 	// Check that we do not have the payment with the same id in order to
 	// prevent map override.
 	s.pendingMutex.Lock()
-	_, ok := s.pendingPayments[htlc.PaymentHash]
-	if ok {
-		s.pendingMutex.Unlock()
-		return zeroPreimage, errors.Errorf("pending payment with id (%v) "+
-			"already exist", htlc.ID)
-	}
 	s.pendingPayments[htlc.PaymentHash] = append(
 		s.pendingPayments[htlc.PaymentHash], payment)
 	s.pendingMutex.Unlock()
@@ -767,4 +761,14 @@ func (s *Switch) findPayment(amount btcutil.Amount,
 
 	return nil, errors.Errorf("unable to remove pending payment with "+
 		"hash(%v) and amount(%v)", hash, amount)
+}
+
+// numPendingPayments returns the overall number of pending user payments.
+func (s *Switch) numPendingPayments() int {
+	var l int
+	for _, payments := range s.pendingPayments {
+		l += len(payments)
+	}
+
+	return l
 }
