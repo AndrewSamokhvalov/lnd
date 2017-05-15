@@ -668,10 +668,22 @@ func (s *server) peerTerminationWatcher(p *peer) {
 
 	srvrLog.Debugf("Peer %v has been disconnected", p)
 
-	// Tell the switch to unregister all links associated with this peer.
+	// Tell the switch to remove all links associated with this peer.
 	// Passing nil as the target link indicates that all links associated
 	// with this interface should be closed.
-	p.server.htlcSwitch.RemoveLinks(p.addr.IdentityKey.SerializeCompressed())
+	hop := htlcswitch.NewHopID(p.addr.IdentityKey.SerializeCompressed())
+	links, err := p.server.htlcSwitch.GetLinks(hop)
+	if err != nil {
+		srvrLog.Errorf("unable to get channel links: %v", err)
+	}
+
+	for _, link := range links {
+		err := p.server.htlcSwitch.RemoveLink(link.ChanID())
+		if err != nil {
+			srvrLog.Errorf("unable to remove channel link: %v",
+				err)
+		}
+	}
 
 	// Send the peer to be garbage collected by the server.
 	p.server.donePeers <- p

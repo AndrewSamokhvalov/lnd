@@ -49,10 +49,6 @@ func newMockServer(t *testing.T, name string) *mockServer {
 }
 
 func (s *mockServer) Start() error {
-	if err := s.htlcSwitch.Start(); err != nil {
-		return err
-	}
-
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -79,14 +75,14 @@ func (s *mockServer) Start() error {
 // mockHopIterator represents the test version of hop iterator which instead
 // of encrypting the path in onion blob just stores the path as a list of hops.
 type mockHopIterator struct {
-	hops []hopID
+	hops []HopID
 }
 
-func newMockHopIterator(hops ...hopID) HopIterator {
+func newMockHopIterator(hops ...HopID) HopIterator {
 	return &mockHopIterator{hops: hops}
 }
 
-func (r *mockHopIterator) Next() *hopID {
+func (r *mockHopIterator) Next() *HopID {
 	if len(r.hops) != 0 {
 		next := r.hops[0]
 		r.hops = r.hops[1:]
@@ -129,9 +125,9 @@ func (p *mockIteratorDecoder) Decode(r io.Reader, meta []byte) (
 	}
 	hopLength := binary.BigEndian.Uint32(b[:])
 
-	hops := make([]hopID, hopLength)
+	hops := make([]HopID, hopLength)
 	for i := uint32(0); i < hopLength; i++ {
-		var hop hopID
+		var hop HopID
 
 		_, err := r.Read(hop[:])
 		if err != nil {
@@ -183,7 +179,7 @@ func (s *mockServer) readHandler(message lnwire.Message) error {
 
 	// Dispatch the commitment update message to the proper
 	// channel link dedicated to this channel.
-	link, err := s.htlcSwitch.GetLink(targetChan)
+	link, err := s.htlcSwitch.getLink(targetChan)
 	if err != nil {
 		return err
 	}

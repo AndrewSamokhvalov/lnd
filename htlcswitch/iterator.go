@@ -14,25 +14,25 @@ import (
 	"github.com/roasbeef/btcutil"
 )
 
-// hopID represents the id which is used by propagation subsystem in order to
+// HopID represents the id which is used by propagation subsystem in order to
 // identify lightning network node.
 // TODO(andrew.shvv) remove after switching to the using channel id.
-type hopID [ripemd160.Size]byte
+type HopID [ripemd160.Size]byte
 
-// newHopID creates new instance of hop form node public key.
-func newHopID(pubKey []byte) hopID {
-	var routeID hopID
+// NewHopID creates new instance of hop form node public key.
+func NewHopID(pubKey []byte) HopID {
+	var routeID HopID
 	copy(routeID[:], btcutil.Hash160(pubKey))
 	return routeID
 }
 
 // String returns string representation of hop id.
-func (h hopID) String() string {
+func (h HopID) String() string {
 	return hex.EncodeToString(h[:])
 }
 
 // IsEqual checks does the two hop ids are equal.
-func (h hopID) IsEqual(h2 hopID) bool {
+func (h HopID) IsEqual(h2 HopID) bool {
 	return bytes.Equal(h[:], h2[:])
 }
 
@@ -41,7 +41,7 @@ func (h hopID) IsEqual(h2 hopID) bool {
 // algorithm which we use to determine the next hope in htlc route.
 type HopIterator interface {
 	// Next returns next hop if exist and nil if route is ended.
-	Next() *hopID
+	Next() *HopID
 
 	// Encode encodes iterator and writes it to the writer.
 	Encode(w io.Writer) error
@@ -121,7 +121,7 @@ func (r *sphinxHopIterator) Encode(w io.Writer) error {
 
 // Next returns next hop if exist and nil if route is ended.
 // NOTE: Part of the HopIterator interface.
-func (r *sphinxHopIterator) Next() *hopID {
+func (r *sphinxHopIterator) Next() *HopID {
 	// If next node was already given than behave as if no hops in route.
 	if r.sphinxPacket == nil {
 		return nil
@@ -132,7 +132,7 @@ func (r *sphinxHopIterator) Next() *hopID {
 		return nil
 
 	case sphinx.MoreHops:
-		id := (*hopID)(&r.sphinxPacket.NextHop)
+		id := (*HopID)(&r.sphinxPacket.NextHop)
 		r.sphinxPacket = nil
 		return id
 	}
