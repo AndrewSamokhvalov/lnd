@@ -927,13 +927,13 @@ func (p *peer) handleLocalClose(req *htlcswitch.ChanClose) {
 	// ChainNotifier once the closure transaction obtains a single
 	// confirmation.
 	notifier := p.server.chainNotifier
-	go waitForChanToClose(uint32(bestHeight), notifier, req.err,
+	go waitForChanToClose(uint32(bestHeight), notifier, req.Err,
 		req.ChanPoint, closingTxid, func() {
 
 			// First, we'll mark the database as being fully closed
 			// so we'll no longer watch for its ultimate closure
 			// upon startup.
-			err := p.server.chanDB.MarkChanFullyClosed(req.chanPoint)
+			err := p.server.chanDB.MarkChanFullyClosed(req.ChanPoint)
 			if err != nil {
 				req.Err <- err
 				return

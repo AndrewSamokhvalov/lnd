@@ -204,14 +204,12 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 	aliceSigner := &mockSigner{aliceKeyPriv}
 	bobSigner := &mockSigner{bobKeyPriv}
 
-	notifier := &mockNotifier{}
-
 	channelAlice, err := lnwallet.NewLightningChannel(aliceSigner,
-		notifier, aliceChannelState)
+		nil, aliceChannelState)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	channelBob, err := lnwallet.NewLightningChannel(bobSigner, notifier,
+	channelBob, err := lnwallet.NewLightningChannel(bobSigner, nil,
 		bobChannelState)
 	if err != nil {
 		return nil, nil, nil, err
