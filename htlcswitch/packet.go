@@ -16,7 +16,7 @@ type htlcPacket struct {
 
 	// dest is the next channel to which this update will be applied.
 	// TODO(andrew.shvv) use short channel id instead.
-	dest hopID
+	dest HopID
 
 	// src is a previous channel to which htlc was applied.
 	// TODO(andrew.shvv) use short channel id instead.
@@ -32,7 +32,7 @@ type htlcPacket struct {
 // newInitPacket creates htlc switch add packet which encapsulates the
 // add htlc request and additional information for proper forwarding over
 // htlc switch.
-func newInitPacket(dest hopID, htlc *lnwire.UpdateAddHTLC) *htlcPacket {
+func newInitPacket(dest HopID, htlc *lnwire.UpdateAddHTLC) *htlcPacket {
 	return &htlcPacket{
 		dest: dest,
 		htlc: htlc,
@@ -42,7 +42,7 @@ func newInitPacket(dest hopID, htlc *lnwire.UpdateAddHTLC) *htlcPacket {
 // newAddPacket creates htlc switch add packet which encapsulates the
 // add htlc request and additional information for proper forwarding over
 // htlc switch.
-func newAddPacket(src lnwire.ChannelID, dest hopID,
+func newAddPacket(src lnwire.ChannelID, dest HopID,
 	htlc *lnwire.UpdateAddHTLC) *htlcPacket {
 	return &htlcPacket{
 		dest: dest,

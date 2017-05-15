@@ -280,9 +280,9 @@ func generateRoute(peers []Peer) ([]byte, [lnwire.OnionPacketSize]byte, error) {
 	}
 
 	// Create array of hops in order to create onion blob.
-	hops := make([]hopID, len(peers) - 1)
+	hops := make([]HopID, len(peers)-1)
 	for i, peer := range peers[1:] {
-		hops[i] = newHopID(peer.PubKey())
+		hops[i] = NewHopID(peer.PubKey())
 	}
 
 	// Initialize iterator and encode it.
@@ -416,8 +416,19 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 
 	// Create three peers/servers.
 	aliceServer := newMockServer(t, "alice")
+	if err := aliceServer.htlcSwitch.Start(); err != nil {
+		t.Fatalf("unable to start htlc switch: %v", err)
+	}
+
 	bobServer := newMockServer(t, "bob")
+	if err := bobServer.htlcSwitch.Start(); err != nil {
+		t.Fatalf("unable to start htlc switch: %v", err)
+	}
+
 	carolServer := newMockServer(t, "carol")
+	if err := carolServer.htlcSwitch.Start(); err != nil {
+		t.Fatalf("unable to start htlc switch: %v", err)
+	}
 
 	// Create mock decoder instead of sphinx one in order to mock the
 	// route which htlc should follow.

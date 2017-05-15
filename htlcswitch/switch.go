@@ -7,8 +7,6 @@ import (
 
 	"crypto/sha256"
 
-	"bytes"
-
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
@@ -100,7 +98,6 @@ type Switch struct {
 	shutdown int32
 	wg       sync.WaitGroup
 	quit     chan struct{}
-	mutex    sync.RWMutex
 
 	// cfg is a copy of the configuration struct that the htlc switch
 	// service was initialized with.
@@ -127,6 +124,10 @@ type Switch struct {
 	// chanCloseRequests is used to transfer the channel close request to
 	// the channel close handler.
 	chanCloseRequests chan *ChanClose
+
+	// linkControl is a channel used to propogate add/remove/get htlc
+	// switch handler commands.
+	linkControl chan interface{}
 }
 
 // New creates the new instance of htlc switch.
@@ -138,6 +139,7 @@ func New(cfg Config) *Switch {
 		pendingPayments:   make(map[lnwallet.PaymentHash][]*pendingPayment),
 		forwardCommands:   make(chan *forwardPacketCmd),
 		chanCloseRequests: make(chan *ChanClose),
+		linkControl:       make(chan interface{}),
 		quit:              make(chan struct{}),
 	}
 }
@@ -168,7 +170,7 @@ func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 	// Generate and send new update packet, if error will be received
 	// on this stage it means that packet haven't left boundaries of our
 	// system and something wrong happened.
-	hop := newHopID(nextNode)
+	hop := NewHopID(nextNode)
 	packet := newInitPacket(hop, htlc)
 	if err := s.forward(packet); err != nil {
 		s.removePendingPayment(payment.amount, payment.paymentHash)
@@ -260,7 +262,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		payment.preimage <- htlc.PaymentPreimage
 		s.removePendingPayment(payment.amount, payment.paymentHash)
 
-		source, err := s.GetLink(packet.src)
+		source, err := s.getLink(packet.src)
 		if err != nil {
 			err := errors.Errorf("unable to find source channel "+
 				"link by ChannelID(%v): %v", packet.src, err)
@@ -286,7 +288,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		payment.preimage <- zeroPreimage
 		s.removePendingPayment(payment.amount, payment.paymentHash)
 
-		source, err := s.GetLink(packet.src)
+		source, err := s.getLink(packet.src)
 		if err != nil {
 			err := errors.Errorf("unable to find source channel "+
 				"link by ChannelID(%v): %v", packet.src, err)
@@ -313,7 +315,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 	// payment circuit within our internal state so we can properly forward
 	// the ultimate settle message back latter.
 	case *lnwire.UpdateAddHTLC:
-		source, err := s.GetLink(packet.src)
+		source, err := s.getLink(packet.src)
 		if err != nil {
 			err := errors.Errorf("unable to find channel link "+
 				"by channel point (%v): %v", packet.src, err)
@@ -422,7 +424,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		}
 
 		// Propagating settle/fail htlc back to src of add htlc packet.
-		source, err := s.GetLink(circuit.Src)
+		source, err := s.getLink(circuit.Src)
 		if err != nil {
 			err := errors.Errorf("unable to get source "+
 				"channel link to forward settle/fail htlc: %v",
@@ -434,7 +436,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 
 		// Retrieve the destination channel link in order to restore
 		// the consumed slot.
-		destination, err := s.GetLink(circuit.Dest)
+		destination, err := s.getLink(circuit.Dest)
 		if err != nil {
 			err := errors.Errorf("unable to get destination "+
 				"channel link to consume slot: %v", err)
@@ -488,13 +490,11 @@ func (s *Switch) handleChanelClose(req *ChanClose) {
 	chanID := lnwire.NewChanIDFromOutPoint(req.ChanPoint)
 
 	var link ChannelLink
-	s.mutex.RLock()
 	for _, l := range s.links {
 		if l.ChanID() == chanID {
 			link = l
 		}
 	}
-	s.mutex.RUnlock()
 
 	if link == nil {
 		req.Err <- errors.Errorf("channel with ChannelID(%v) not "+
@@ -516,6 +516,16 @@ func (s *Switch) handleChanelClose(req *ChanClose) {
 // NOTE: Should be run as goroutine.
 func (s *Switch) startHandling() {
 	defer s.wg.Done()
+
+	// Remove all links on stop.
+	defer func() {
+		for _, link := range s.links {
+			if err := s.removeLink(link.ChanID()); err != nil {
+				log.Errorf("unable to remove " +
+					"channel link on stop: %v, err")
+			}
+		}
+	}()
 
 	// TODO(roasbeef): cleared vs settled distinction
 	var prevNumUpdates uint64
@@ -578,6 +588,22 @@ func (s *Switch) startHandling() {
 			prevSatSent = overallSatSent
 			prevSatRecv = overallSatRecv
 
+		case cmd := <-s.linkControl:
+			switch cmd := cmd.(type) {
+			case *addLinkCmd:
+				cmd.err <- s.addLink(cmd.link)
+			case *removeLinkCmd:
+				cmd.err <- s.removeLink(cmd.chanID)
+			case *getLinkCmd:
+				link, err := s.getLink(cmd.chanID)
+				cmd.done <- link
+				cmd.err <- err
+			case *getLinksCmd:
+				links, err := s.getLinks(cmd.peer)
+				cmd.done <- links
+				cmd.err <- err
+			}
+
 		case <-s.quit:
 			return
 		}
@@ -609,41 +635,77 @@ func (s *Switch) Stop() error {
 
 	log.Infof("Htlc Switch shutting down")
 
-	s.mutex.Lock()
-	for _, link := range s.links {
-		delete(s.links, link.ChanID())
-		go link.Stop()
-		log.Infof("Remove channel link with ChannelID(%v)", link.ChanID())
-	}
-	s.mutex.Unlock()
-
 	close(s.quit)
 	s.wg.Wait()
 
 	return nil
 }
 
-// AddLink is used to add and start the newly created channel link and start
-// use it to handle the channel updates.
+// addLinkCmd is a add link command wrapper, it is used to propagate handler
+// parameters and return handler error.
+type addLinkCmd struct {
+	link ChannelLink
+	err  chan error
+}
+
+// AddLink is used to initiate the handling of the add link command. The
+// request will be propagated and handled in the main goroutine.
 func (s *Switch) AddLink(link ChannelLink) error {
-	if err := link.Start(); err != nil {
-		return err
+	command := &addLinkCmd{
+		link: link,
+		err:  make(chan error, 1),
 	}
 
-	s.mutex.Lock()
+	select {
+	case s.linkControl <- command:
+		return <-command.err
+	case <-s.quit:
+		return errors.New("Htlc Switch was stopped")
+	}
+}
+
+// addLink is used to add the newly created channel link and start
+// use it to handle the channel updates.
+func (s *Switch) addLink(link ChannelLink) error {
+	if err := link.Start(); err != nil {
+		return err
+
+	}
+
 	s.links[link.ChanID()] = newBoundedLinkChan(numSlots, link)
-	s.mutex.Unlock()
 
 	log.Infof("Added channel link with ChannelID(%v), bandwidth=%v",
 		link.ChanID(), link.Bandwidth())
 	return nil
 }
 
-// GetLink returns the channel link by its channel point.
-func (s *Switch) GetLink(chanID lnwire.ChannelID) (ChannelLink, error) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
+// getLinkCmd is a get link command wrapper, it is used to propagate handler
+// parameters and return handler error.
+type getLinkCmd struct {
+	chanID lnwire.ChannelID
+	err    chan error
+	done   chan ChannelLink
+}
 
+// GetLink is used to initiate the handling of the get link command. The
+// request will be propagated/handled to/in the main goroutine.
+func (s *Switch) GetLink(chanID lnwire.ChannelID) (ChannelLink, error) {
+	command := &getLinkCmd{
+		chanID: chanID,
+		err:    make(chan error, 1),
+		done:   make(chan ChannelLink, 1),
+	}
+
+	select {
+	case s.linkControl <- command:
+		return <-command.done, <-command.err
+	case <-s.quit:
+		return nil, errors.New("Htlc Switch was stopped")
+	}
+}
+
+// getLink returns the channel link by its channel point.
+func (s *Switch) getLink(chanID lnwire.ChannelID) (ChannelLink, error) {
 	link, ok := s.links[chanID]
 	if !ok {
 		return nil, ErrChannelLinkNotFound
@@ -652,11 +714,31 @@ func (s *Switch) GetLink(chanID lnwire.ChannelID) (ChannelLink, error) {
 	return link, nil
 }
 
-// RemoveLink is used to remove and stop the channel link.
-func (s *Switch) RemoveLink(chanID lnwire.ChannelID) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+// removeLinkCmd is a get link command wrapper, it is used to propagate handler
+// parameters and return handler error.
+type removeLinkCmd struct {
+	chanID lnwire.ChannelID
+	err    chan error
+}
 
+// GetLink is used to initiate the handling of the remove link command. The
+// request will be propagated/handled to/in the main goroutine.
+func (s *Switch) RemoveLink(chanID lnwire.ChannelID) error {
+	command := &removeLinkCmd{
+		chanID: chanID,
+		err:    make(chan error, 1),
+	}
+
+	select {
+	case s.linkControl <- command:
+		return <-command.err
+	case <-s.quit:
+		return errors.New("Htlc Switch was stopped")
+	}
+}
+
+// removeLink is used to remove and stop the channel link.
+func (s *Switch) removeLink(chanID lnwire.ChannelID) error {
 	link, ok := s.links[chanID]
 	if !ok {
 		return ErrChannelLinkNotFound
@@ -669,40 +751,37 @@ func (s *Switch) RemoveLink(chanID lnwire.ChannelID) error {
 	return nil
 }
 
-// RemoveLinks removes all channel links by given node public key.
-func (s *Switch) RemoveLinks(pubKey []byte) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	var links []ChannelLink
-	for _, link := range s.links {
-		if bytes.Equal(link.Peer().PubKey(), pubKey) {
-			links = append(links, link)
-		}
-	}
-	if links == nil {
-		return errors.Errorf("unable to locate channel link by"+
-			"public key %v", pubKey)
-	}
-
-	for _, link := range links {
-		delete(s.links, link.ChanID())
-		go link.Stop()
-		log.Infof("Remove channel link with ChannelID(%v)", link.ChanID())
-	}
-
-	return nil
+// getLinksCmd is a get links command wrapper, it is used to propagate handler
+// parameters and return handler error.
+type getLinksCmd struct {
+	peer HopID
+	err  chan error
+	done chan []ChannelLink
 }
 
-// getLinks is helper function which returns the channel links by hop
-// destination id.
-func (s *Switch) getLinks(destination hopID) ([]ChannelLink, error) {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
+// GetLinks is used to initiate the handling of the get links command. The
+// request will be propagated/handled to/in the main goroutine.
+func (s *Switch) GetLinks(hop HopID) ([]ChannelLink, error) {
+	command := &getLinksCmd{
+		peer: hop,
+		err:  make(chan error, 1),
+		done: make(chan []ChannelLink, 1),
+	}
 
+	select {
+	case s.linkControl <- command:
+		return <-command.done, <-command.err
+	case <-s.quit:
+		return nil, errors.New("Htlc Switch was stopped")
+	}
+}
+
+// getLinks is function which returns the channel links of the peer by hop
+// destination id.
+func (s *Switch) getLinks(destination HopID) ([]ChannelLink, error) {
 	var result []ChannelLink
 	for _, link := range s.links {
-		hopID := newHopID(link.Peer().PubKey())
+		hopID := NewHopID(link.Peer().PubKey())
 		if hopID.IsEqual(destination) {
 			result = append(result, link)
 		}
@@ -763,7 +842,8 @@ func (s *Switch) findPayment(amount btcutil.Amount,
 		"hash(%v) and amount(%v)", hash, amount)
 }
 
-// numPendingPayments returns the overall number of pending user payments.
+// numPendingPayments is helper function which returns the overall number of
+// pending user payments.
 func (s *Switch) numPendingPayments() int {
 	var l int
 	for _, payments := range s.pendingPayments {

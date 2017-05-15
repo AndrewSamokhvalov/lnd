@@ -50,7 +50,7 @@ func TestSwitchForward(t *testing.T) {
 	rhash := fastsha256.Sum256(preimage[:])
 	packet = newAddPacket(
 		aliceChannelLink.ChanID(),
-		newHopID(bobChannelLink.Peer().PubKey()),
+		NewHopID(bobChannelLink.Peer().PubKey()),
 		&lnwire.UpdateAddHTLC{
 			PaymentHash: rhash,
 			Amount:      1,
@@ -126,7 +126,7 @@ func TestSwitchCancel(t *testing.T) {
 	rhash := fastsha256.Sum256(preimage[:])
 	request = newAddPacket(
 		aliceChannelLink.ChanID(),
-		newHopID(bobChannelLink.Peer().PubKey()),
+		NewHopID(bobChannelLink.Peer().PubKey()),
 		&lnwire.UpdateAddHTLC{
 			PaymentHash: rhash,
 			Amount:      1,
@@ -200,7 +200,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	rhash := fastsha256.Sum256(preimage[:])
 	request = newAddPacket(
 		aliceChannelLink.ChanID(),
-		newHopID(bobChannelLink.Peer().PubKey()),
+		NewHopID(bobChannelLink.Peer().PubKey()),
 		&lnwire.UpdateAddHTLC{
 			PaymentHash: rhash,
 			Amount:      1,
