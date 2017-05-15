@@ -297,19 +297,36 @@ func TestSwitchSendPayment(t *testing.T) {
 	// Handle the request and checks that bob channel link received it.
 	errChan := make(chan error)
 	go func() {
-		_, err := s.SendHTLC(aliceChannelLink.Peer().PubKey(),
-			update)
+		_, err := s.SendHTLC(aliceChannelLink.Peer().PubKey(), update)
+		errChan <- err
+	}()
+
+	go func() {
+		// Send the payment with the same payment hash and same
+		// amount and check that it will be propagated successfully
+		_, err := s.SendHTLC(aliceChannelLink.Peer().PubKey(), update)
 		errChan <- err
 	}()
 
 	select {
 	case <-aliceChannelLink.packets:
 		break
+	case err := <-errChan:
+		t.Fatalf("unable to send payment: %v", err)
 	case <-time.After(time.Second):
 		t.Fatal("request was not propogated to destination")
 	}
 
-	if len(s.pendingPayments) != 1 {
+	select {
+	case <-aliceChannelLink.packets:
+		break
+	case err := <-errChan:
+		t.Fatalf("unable to send payment: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("request was not propogated to destination")
+	}
+
+	if s.numPendingPayments() != 2 {
 		t.Fatal("wrong amount of pending payments")
 	}
 
@@ -340,7 +357,22 @@ func TestSwitchSendPayment(t *testing.T) {
 		t.Fatal("err wasn't received")
 	}
 
-	if len(s.pendingPayments) != 0 {
+	// Send second failure response and check that user were able to
+	// receive the error.
+	if err := s.forward(packet); err != nil {
+		t.Fatalf("can't forward htlc packet: %v", err)
+	}
+
+	select {
+	case err := <-errChan:
+		if err.Error() != errors.New(lnwire.IncorrectValue).Error() {
+			t.Fatal("err wasn't received")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("err wasn't received")
+	}
+
+	if s.numPendingPayments() != 0 {
 		t.Fatal("wrong amount of pending payments")
 	}
 }
