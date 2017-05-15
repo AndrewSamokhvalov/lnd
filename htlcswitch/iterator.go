@@ -110,18 +110,7 @@ func NewSphinxBlob(route *routing.Route, paymentHash []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Generate hop iterator and convert it in bytes onion blob.
-	iterator := &sphinxHopIterator{
-		onionPacket:  onionPacket,
-		sphinxPacket: nil,
-	}
-
-	var b bytes.Buffer
-	if err := iterator.Encode(&b); err != nil {
-		return nil, err
-	}
-
-	return b.Bytes(), nil
+	return onionBlob.Bytes(), nil
 }
 
 // Encode encodes iterator and writes it to the writer.
