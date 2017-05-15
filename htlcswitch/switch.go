@@ -117,6 +117,10 @@ type Switch struct {
 	// this channel.
 	links map[lnwire.ChannelID]*boundedLinkChan
 
+	// linksIndex is a map which is needed for quick lookup of channels
+	// which are belongs to specific peer.
+	linksIndex map[HopID][]*boundedLinkChan
+
 	// forwardCommands is used for propogating the htlc packet forward
 	// requests.
 	forwardCommands chan *forwardPacketCmd
@@ -136,6 +140,7 @@ func New(cfg Config) *Switch {
 		cfg:               &cfg,
 		circuits:          newCircuitMap(),
 		links:             make(map[lnwire.ChannelID]*boundedLinkChan),
+		linksIndex:        make(map[HopID][]*boundedLinkChan),
 		pendingPayments:   make(map[lnwallet.PaymentHash][]*pendingPayment),
 		forwardCommands:   make(chan *forwardPacketCmd),
 		chanCloseRequests: make(chan *ChanClose),
@@ -672,7 +677,18 @@ func (s *Switch) addLink(link ChannelLink) error {
 
 	}
 
-	s.links[link.ChanID()] = newBoundedLinkChan(numSlots, link)
+	// Wrap channe link into bounded channel link in order to eliminate the
+	// htlcs overfluding.
+	blink := newBoundedLinkChan(numSlots, link)
+
+	// Add channel link to the channel map, in order to quickly lookup
+	// channel by channel id.
+	s.links[link.ChanID()] = blink
+
+	// Add channel link to the index map, in order to quickly lookup
+	// channels by peer pub key.
+	hop := NewHopID(link.Peer().PubKey())
+	s.linksIndex[hop] = append(s.linksIndex[hop], blink)
 
 	log.Infof("Added channel link with ChannelID(%v), bandwidth=%v",
 		link.ChanID(), link.Bandwidth())
@@ -744,7 +760,25 @@ func (s *Switch) removeLink(chanID lnwire.ChannelID) error {
 		return ErrChannelLinkNotFound
 	}
 
+	// Remove the channel from channel map.
 	delete(s.links, link.ChanID())
+
+	// Remove the channel from channel index.
+	hop := NewHopID(link.Peer().PubKey())
+	links := s.linksIndex[hop]
+	for i, l := range links {
+		if l.ChanID() == link.ChanID() {
+			links[i] = links[len(links)-1]
+			links[len(links)-1] = nil
+			s.linksIndex[hop] = links[:len(links)-1]
+			break
+
+			if len(links) == 0 {
+				delete(s.linksIndex, hop)
+			}
+		}
+	}
+
 	go link.Stop()
 	log.Infof("Remove channel link with ChannelID(%v)", link.ChanID())
 
@@ -779,17 +813,17 @@ func (s *Switch) GetLinks(hop HopID) ([]ChannelLink, error) {
 // getLinks is function which returns the channel links of the peer by hop
 // destination id.
 func (s *Switch) getLinks(destination HopID) ([]ChannelLink, error) {
-	var result []ChannelLink
-	for _, link := range s.links {
-		hopID := NewHopID(link.Peer().PubKey())
-		if hopID.IsEqual(destination) {
-			result = append(result, link)
-		}
-	}
-	if result == nil {
+	links, ok := s.linksIndex[destination]
+	if !ok {
 		return nil, errors.Errorf("unable to locate channel link by"+
 			"destination hop id %v", destination)
 	}
+
+	result := make([]ChannelLink, len(links))
+	for i, link := range links {
+		result[i] = ChannelLink(link)
+	}
+
 	return result, nil
 }
 
