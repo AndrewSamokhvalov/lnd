@@ -273,32 +273,27 @@ func generatePayment(amount btcutil.Amount, blob [lnwire.OnionPacketSize]byte) (
 }
 
 // generateRoute generates the path blob by given array of peers.
-func generateRoute(peers ...Peer) ([lnwire.OnionPacketSize]byte, error) {
+func generateRoute(peers []Peer) ([]byte, [lnwire.OnionPacketSize]byte, error) {
 	var blob [lnwire.OnionPacketSize]byte
+	if len(peers) == 0 {
+		return nil, blob, errors.New("empty path")
+	}
 
-	hops := make([]hopID, len(peers))
-
-	// Create array of hops.
-	for i, peer := range peers {
+	// Create array of hops in order to create onion blob.
+	hops := make([]hopID, len(peers) - 1)
+	for i, peer := range peers[1:] {
 		hops[i] = newHopID(peer.PubKey())
 	}
 
-	// Initialize iterator and get first hop as htlc destination.
-	iterator := newMockHopIterator(hops...)
-	if h := iterator.Next(); h != nil {
-		_ = *h
-	} else {
-		return blob, errors.New("empty path")
-	}
-
-	// Encode the remaining part iterator.
+	// Initialize iterator and encode it.
 	var b bytes.Buffer
+	iterator := newMockHopIterator(hops...)
 	if err := iterator.Encode(&b); err != nil {
-		return blob, err
+		return nil, blob, err
 	}
 	copy(blob[:], b.Bytes())
 
-	return blob, nil
+	return peers[0].PubKey(), blob, nil
 
 }
 
@@ -340,7 +335,7 @@ func (n *threeHopNetwork) makePayment(peer Peer,
 
 	// Generate route convert it to blob, and return next destination for
 	// htlc add request.
-	blob, err := generateRoute(peers...)
+	firstNode, blob, err := generateRoute(peers)
 	if err != nil {
 		return nil, err
 	}
@@ -360,8 +355,7 @@ func (n *threeHopNetwork) makePayment(peer Peer,
 	// Send payment and expose err channel.
 	errChan := make(chan error)
 	go func() {
-		_, err := n.aliceServer.htlcSwitch.SendHTLC(peers[0].PubKey(),
-			htlc)
+		_, err := n.aliceServer.htlcSwitch.SendHTLC(firstNode, htlc)
 		errChan <- err
 	}()
 

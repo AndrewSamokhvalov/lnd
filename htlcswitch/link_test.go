@@ -294,7 +294,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 		n.bobServer,
 		n.carolServer,
 	}
-	blob, err := generateRoute(peers...)
+	firstNode, blob, err := generateRoute(peers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 
 	// Send payment and expose err channel.
 
-	if _, err := n.carolServer.htlcSwitch.SendHTLC(peers[0].PubKey(),
+	if _, err := n.carolServer.htlcSwitch.SendHTLC(firstNode,
 		htlc); err == nil {
 		t.Fatal("error wasn't received")
 	}
