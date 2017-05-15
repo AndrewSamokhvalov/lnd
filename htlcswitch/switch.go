@@ -526,8 +526,8 @@ func (s *Switch) startHandling() {
 	defer func() {
 		for _, link := range s.links {
 			if err := s.removeLink(link.ChanID()); err != nil {
-				log.Errorf("unable to remove " +
-					"channel link on stop: %v, err")
+				log.Errorf("unable to remove "+
+					"channel link on stop: %v", err)
 			}
 		}
 	}()
@@ -737,7 +737,7 @@ type removeLinkCmd struct {
 	err    chan error
 }
 
-// GetLink is used to initiate the handling of the remove link command. The
+// RemoveLink is used to initiate the handling of the remove link command. The
 // request will be propagated/handled to/in the main goroutine.
 func (s *Switch) RemoveLink(chanID lnwire.ChannelID) error {
 	command := &removeLinkCmd{
@@ -768,14 +768,16 @@ func (s *Switch) removeLink(chanID lnwire.ChannelID) error {
 	links := s.linksIndex[hop]
 	for i, l := range links {
 		if l.ChanID() == link.ChanID() {
+			// Delete without preserving order
+			// Google: Golang slice tricks
 			links[i] = links[len(links)-1]
 			links[len(links)-1] = nil
 			s.linksIndex[hop] = links[:len(links)-1]
-			break
 
-			if len(links) == 0 {
+			if len(s.linksIndex[hop]) == 0 {
 				delete(s.linksIndex, hop)
 			}
+			break
 		}
 	}
 
