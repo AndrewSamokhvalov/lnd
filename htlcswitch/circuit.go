@@ -57,6 +57,9 @@ type paymentCircuit struct {
 	// request back.
 	// TODO(andrew.shvv) use short channel id instead.
 	Dest lnwire.ChannelID
+
+	// RefCount is used to count the circuits with the same circuit key.
+	RefCount int
 }
 
 // newPaymentCircuit creates new payment circuit instance.
@@ -65,6 +68,7 @@ func newPaymentCircuit(src, dest lnwire.ChannelID, key circuitKey) *paymentCircu
 		Src:         src,
 		Dest:        dest,
 		PaymentHash: key,
+		RefCount:    1,
 	}
 }
 
@@ -85,14 +89,14 @@ func (a *paymentCircuit) isEqual(b *paymentCircuit) bool {
 // TODO(andrew.shvv) make it persistent
 type circuitMap struct {
 	mutex    sync.RWMutex
-	circuits map[circuitKey][]*paymentCircuit
+	circuits map[circuitKey]*paymentCircuit
 }
 
 // newCircuitMap initialized circuit map with previously stored circuits and
 // return circuit map instance.
 func newCircuitMap() *circuitMap {
 	return &circuitMap{
-		circuits: make(map[circuitKey][]*paymentCircuit),
+		circuits: make(map[circuitKey]*paymentCircuit),
 	}
 }
 
@@ -101,37 +105,37 @@ func (m *circuitMap) add(circuit *paymentCircuit) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	m.circuits[circuit.PaymentHash] = append(
-		m.circuits[circuit.PaymentHash],
-		circuit,
-	)
+	// Examine the circuit map to see if this
+	// circuit is already in use or not. If so,
+	// then we'll simply increment the reference
+	// count. Otherwise, we'll create a new circuit
+	// from scratch.
+	// TODO(roasbeef): include dest+src+amt in key
+	if c, ok := m.circuits[circuit.PaymentHash]; ok {
+		c.RefCount++
+	} else {
+		m.circuits[circuit.PaymentHash] = circuit
+	}
 
 	return nil
 }
 
 // remove function removes circuit from map.
-func (m *circuitMap) remove(key circuitKey, dest lnwire.ChannelID) (
+func (m *circuitMap) remove(key circuitKey) (
 	*paymentCircuit, error) {
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if circuits, ok := m.circuits[key]; ok {
-		for i, circuit := range circuits {
-			if circuit.Dest == dest {
-				// Delete without preserving order
-				// Google: Golang slice tricks
-				circuits[i] = circuits[len(circuits)-1]
-				circuits[len(circuits)-1] = nil
-				m.circuits[key] = circuits[:len(circuits)-1]
-
-				return circuit, nil
-			}
+	if circuit, ok := m.circuits[key]; ok {
+		if circuit.RefCount--; circuit.RefCount == 0 {
+			delete(m.circuits, key)
 		}
+		return circuit, nil
 	}
 
 	return nil, errors.Errorf("can't find circuit"+
-		" for key %v and destination %v", key, dest)
+		" for key %v", key)
 }
 
 // pending returns number of circuits which are waiting for to be completed
@@ -142,7 +146,7 @@ func (m *circuitMap) pending() int {
 
 	var length int
 	for _, circuits := range m.circuits {
-		length += len(circuits)
+		length += circuits.RefCount
 	}
 
 	return length

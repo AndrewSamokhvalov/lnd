@@ -390,7 +390,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 	case *lnwire.UpdateFufillHTLC, *lnwire.UpdateFailHTLC:
 		// Exit if we can't find and remove the active circuit to
 		// continue propagating the fail over.
-		circuit, err := s.circuits.remove(packet.payHash, packet.src)
+		circuit, err := s.circuits.remove(packet.payHash)
 		if err != nil {
 			err := errors.Errorf("unable to remove "+
 				"circuit for payment hash: %v", packet.payHash)
