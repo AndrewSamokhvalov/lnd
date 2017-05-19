@@ -24,11 +24,6 @@ var (
 	zeroPreimage [sha256.Size]byte
 )
 
-// To ensure we never accidentally cause an HTLC overflow, we'll use
-// this buffered channel as as semaphore in order to limit the number
-// of outstanding HTLC's we extend to the target link.
-const numSlots = lnwallet.MaxHTLCNumber / 2
-
 // pendingPayment represents the payment which made by user and waits for
 // updates to be received whether the payment has been rejected or proceed
 // successfully.
@@ -115,11 +110,11 @@ type Switch struct {
 
 	// links is a map of channel id and channel link which manages
 	// this channel.
-	links map[lnwire.ChannelID]*boundedLinkChan
+	links map[lnwire.ChannelID]ChannelLink
 
 	// linksIndex is a map which is needed for quick lookup of channels
 	// which are belongs to specific peer.
-	linksIndex map[HopID][]*boundedLinkChan
+	linksIndex map[HopID][]ChannelLink
 
 	// forwardCommands is used for propogating the htlc packet forward
 	// requests.
@@ -139,8 +134,8 @@ func New(cfg Config) *Switch {
 	return &Switch{
 		cfg:               &cfg,
 		circuits:          newCircuitMap(),
-		links:             make(map[lnwire.ChannelID]*boundedLinkChan),
-		linksIndex:        make(map[HopID][]*boundedLinkChan),
+		links:             make(map[lnwire.ChannelID]ChannelLink),
+		linksIndex:        make(map[HopID][]ChannelLink),
 		pendingPayments:   make(map[lnwallet.PaymentHash][]*pendingPayment),
 		forwardCommands:   make(chan *forwardPacketCmd),
 		chanCloseRequests: make(chan *ChanClose),
@@ -233,10 +228,10 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 
 		// Try to find destination channel link with appropriate
 		// bandwidth.
-		var destination *boundedLinkChan
+		var destination ChannelLink
 		for _, link := range links {
 			if link.Bandwidth() >= htlc.Amount {
-				destination = link.(*boundedLinkChan)
+				destination = link
 				break
 			}
 		}
@@ -252,10 +247,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 
 		// Send the packet to the destination channel link which
 		// manages then channel.
-		go func() {
-			destination.consumeSlot()
-			destination.HandleSwitchPacket(packet)
-		}()
+		destination.HandleSwitchPacket(packet)
 		return nil
 
 	// We've just received a settle update which means we can finalize
@@ -266,15 +258,6 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		payment.err <- nil
 		payment.preimage <- htlc.PaymentPreimage
 		s.removePendingPayment(payment.amount, payment.paymentHash)
-
-		source, err := s.getLink(packet.src)
-		if err != nil {
-			err := errors.Errorf("unable to find source channel "+
-				"link by ChannelID(%v): %v", packet.src, err)
-			log.Error(err)
-			return err
-		}
-		source.(*boundedLinkChan).restoreSlot()
 
 	// We've just received a fail update which means we can finalize
 	// the user payment and return fail response.
@@ -292,15 +275,6 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		payment.err <- userErr
 		payment.preimage <- zeroPreimage
 		s.removePendingPayment(payment.amount, payment.paymentHash)
-
-		source, err := s.getLink(packet.src)
-		if err != nil {
-			err := errors.Errorf("unable to find source channel "+
-				"link by ChannelID(%v): %v", packet.src, err)
-			log.Error(err)
-			return err
-		}
-		source.(*boundedLinkChan).restoreSlot()
 
 	default:
 		return errors.New("wrong update type")
@@ -350,10 +324,10 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 
 		// Try to find destination channel link with appropriate
 		// bandwidth.
-		var destination *boundedLinkChan
+		var destination ChannelLink
 		for _, link := range links {
 			if link.Bandwidth() >= htlc.Amount {
-				destination = link.(*boundedLinkChan)
+				destination = link
 				break
 			}
 		}
@@ -407,11 +381,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 
 		// Send the packet to the destination channel link which
 		// manages the channel.
-		go func() {
-			source.(*boundedLinkChan).consumeSlot()
-			destination.consumeSlot()
-			destination.HandleSwitchPacket(packet)
-		}()
+		destination.HandleSwitchPacket(packet)
 		return nil
 
 	// We've just received a settle packet which means we can finalize the
@@ -437,24 +407,12 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 			log.Error(err)
 			return err
 		}
-		source.(*boundedLinkChan).restoreSlot()
-
-		// Retrieve the destination channel link in order to restore
-		// the consumed slot.
-		destination, err := s.getLink(circuit.Dest)
-		if err != nil {
-			err := errors.Errorf("unable to get destination "+
-				"channel link to consume slot: %v", err)
-			log.Error(err)
-			return err
-		}
-		destination.(*boundedLinkChan).restoreSlot()
 
 		log.Debugf("Closing completed onion "+
 			"circuit for %x: %v<->%v", packet.payHash[:],
 			circuit.Src, circuit.Dest)
 
-		go source.HandleSwitchPacket(packet)
+		source.HandleSwitchPacket(packet)
 		return nil
 
 	default:
@@ -677,18 +635,14 @@ func (s *Switch) addLink(link ChannelLink) error {
 
 	}
 
-	// Wrap channe link into bounded channel link in order to eliminate the
-	// htlcs overfluding.
-	blink := newBoundedLinkChan(numSlots, link)
-
 	// Add channel link to the channel map, in order to quickly lookup
 	// channel by channel id.
-	s.links[link.ChanID()] = blink
+	s.links[link.ChanID()] = link
 
 	// Add channel link to the index map, in order to quickly lookup
 	// channels by peer pub key.
 	hop := NewHopID(link.Peer().PubKey())
-	s.linksIndex[hop] = append(s.linksIndex[hop], blink)
+	s.linksIndex[hop] = append(s.linksIndex[hop], link)
 
 	log.Infof("Added channel link with ChannelID(%v), bandwidth=%v",
 		link.ChanID(), link.Bandwidth())
