@@ -1686,6 +1686,9 @@
     "lnrpcSendResponse": {
       "type": "object",
       "properties": {
+        "payment_error": {
+          "type": "string"
+        },
         "payment_preimage": {
           "type": "string",
           "format": "byte"
