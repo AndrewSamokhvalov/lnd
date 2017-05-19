@@ -114,7 +114,8 @@ func TestChannelLinkSingleHopPayment(t *testing.T) {
 	}
 
 	if aliceBandwidthBefore-amount != n.aliceChannelLink.Bandwidth() {
-		t.Fatal("alice bandwidth isn't match")
+		t.Fatal("alice bandwidth should have descreased on payment " +
+			"amount")
 	}
 
 	if bobBandwidthBefore+amount != n.firstBobChannelLink.Bandwidth() {
@@ -315,8 +316,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 	}
 
 	// Send payment and expose err channel.
-
-	if _, err := n.carolServer.htlcSwitch.SendHTLC(firstNode,
+	if _, err := n.aliceServer.htlcSwitch.SendHTLC(firstNode,
 		htlc); err == nil {
 		t.Fatal("error wasn't received")
 	}
