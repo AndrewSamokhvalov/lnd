@@ -179,7 +179,28 @@ func (s *Switch) SendHTLC(nextNode []byte, update lnwire.Message) (
 
 	// Returns channels so that other subsystem might wait/skip the
 	// waiting of handling of payment.
-	return <-payment.preimage, <-payment.err
+	var preimage [sha256.Size]byte
+	var err error
+
+	select {
+	case p := <-payment.preimage:
+		preimage = p
+	case e := <-payment.err:
+		err = e
+	case <-s.quit:
+		return zeroPreimage, errors.New("service is shutdown")
+	}
+
+	select {
+	case p := <-payment.preimage:
+		preimage = p
+	case e := <-payment.err:
+		err = e
+	case <-s.quit:
+		return zeroPreimage, errors.New("service is shutdown")
+	}
+
+	return preimage, err
 }
 
 // forward is used in order to find next channel link and apply htlc
