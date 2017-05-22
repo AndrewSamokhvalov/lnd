@@ -15,6 +15,8 @@ import (
 	"github.com/roasbeef/btcd/blockchain"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 
+	"encoding/hex"
+
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
@@ -1556,7 +1558,7 @@ func (lc *LightningChannel) SignNextCommitment() ([]byte, error) {
 	// party set up when we initially set up the channel. If we are, then
 	// we'll abort this state transition.
 	err := lc.validateCommitmentSanity(lc.remoteUpdateLog.ackedIndex,
-		lc.localUpdateLog.logIndex, false)
+		lc.localUpdateLog.logIndex, false, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1625,13 +1627,9 @@ func (lc *LightningChannel) SignNextCommitment() ([]byte, error) {
 // also that all outputs are meet Bitcoin spec requirements and they are
 // spendable.
 func (lc *LightningChannel) validateCommitmentSanity(theirLogCounter,
-	ourLogCounter uint64, prediction bool) error {
+	ourLogCounter uint64, prediction bool, full bool) error {
 
 	htlcCount := 0
-
-	if prediction {
-		htlcCount++
-	}
 
 	// Run through all the HTLCs that will be covered by this transaction
 	// in order to calculate theirs count.
@@ -1653,7 +1651,20 @@ func (lc *LightningChannel) validateCommitmentSanity(theirLogCounter,
 		}
 	}
 
-	if htlcCount > MaxHTLCNumber {
+	// In case of local addition of htlc add update we should use the half
+	// of the capacity of the commitment transaction, if we use the full
+	// capacity it will lead to remote htlc updates rejection and
+	// desynchronization of state.
+	maxHTLCNumber := MaxHTLCNumber
+	if !full {
+		maxHTLCNumber = (maxHTLCNumber / 2) - 1
+	}
+
+	if prediction {
+		htlcCount++
+	}
+
+	if htlcCount > maxHTLCNumber {
 		return ErrMaxHTLCNumber
 	}
 
@@ -1676,7 +1687,7 @@ func (lc *LightningChannel) ReceiveNewCommitment(rawSig []byte) error {
 	// the constraints we specified during initial channel setup. If not,
 	// then we'll abort the channel as they've violated our constraints.
 	err := lc.validateCommitmentSanity(lc.remoteUpdateLog.logIndex,
-		lc.localUpdateLog.ackedIndex, false)
+		lc.localUpdateLog.ackedIndex, false, true)
 	if err != nil {
 		return err
 	}
@@ -2042,7 +2053,7 @@ func (lc *LightningChannel) AddHTLC(htlc *lnwire.UpdateAddHTLC) (uint64, error) 
 	defer lc.Unlock()
 
 	if err := lc.validateCommitmentSanity(lc.remoteUpdateLog.logIndex,
-		lc.localUpdateLog.logIndex, true); err != nil {
+		lc.localUpdateLog.logIndex, true, false); err != nil {
 		return 0, err
 	}
 
@@ -2074,7 +2085,7 @@ func (lc *LightningChannel) ReceiveHTLC(htlc *lnwire.UpdateAddHTLC) (uint64, err
 	defer lc.Unlock()
 
 	if err := lc.validateCommitmentSanity(lc.remoteUpdateLog.logIndex,
-		lc.localUpdateLog.logIndex, true); err != nil {
+		lc.localUpdateLog.logIndex, true, true); err != nil {
 		return 0, err
 	}
 
@@ -2106,7 +2117,8 @@ func (lc *LightningChannel) SettleHTLC(preimage [32]byte) (uint64, error) {
 	paymentHash := sha256.Sum256(preimage[:])
 	targetHTLCs, ok := lc.rHashMap[paymentHash]
 	if !ok {
-		return 0, fmt.Errorf("invalid payment hash")
+		return 0, fmt.Errorf("invalid payment hash(%v)",
+			hex.EncodeToString(paymentHash[:]))
 	}
 	targetHTLC := targetHTLCs[0]
 
@@ -2145,7 +2157,8 @@ func (lc *LightningChannel) ReceiveHTLCSettle(preimage [32]byte, logIndex uint64
 	}
 
 	if !bytes.Equal(htlc.RHash[:], paymentHash[:]) {
-		return fmt.Errorf("invalid payment hash")
+		return fmt.Errorf("invalid payment hash(%v)",
+			hex.EncodeToString(paymentHash[:]))
 	}
 
 	pd := &PaymentDescriptor{
