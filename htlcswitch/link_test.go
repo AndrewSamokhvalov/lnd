@@ -99,7 +99,10 @@ func TestChannelLinkSingleHopPayment(t *testing.T) {
 	// * alice<->bob commitment state to be updated.
 	// * user notification to be sent.
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	invoice, err := n.makePayment(n.bobServer, amount)
+	invoice, err := n.makePayment([]Peer{
+		n.aliceServer,
+		n.bobServer,
+	}, amount)
 	if err != nil {
 		t.Fatalf("unable to make the payment: %v", err)
 	}
@@ -248,7 +251,11 @@ func TestChannelLinkMultiHopPayment(t *testing.T) {
 	// * Alice<->Bob commitment states to be updated.
 	// * user notification to be sent.
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	invoice, err := n.makePayment(n.carolServer, amount)
+	invoice, err := n.makePayment([]Peer{
+		n.aliceServer,
+		n.bobServer,
+		n.carolServer,
+	}, amount)
 	if err != nil {
 		t.Fatalf("unable to send payment: %v", err)
 	}
@@ -308,7 +315,11 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 	// * Cancel HTLC request to be sent back from Bob to Alice.
 	// * user notification to be sent.
 	var amount btcutil.Amount = 4 * btcutil.SatoshiPerBitcoin
-	invoice, err := n.makePayment(n.carolServer, amount)
+	invoice, err := n.makePayment([]Peer{
+		n.aliceServer,
+		n.bobServer,
+		n.carolServer,
+	}, amount)
 	if err == nil {
 		t.Fatal("error haven't been received")
 	} else if err.Error() != errors.New(lnwire.InsufficientCapacity).Error() {
@@ -449,7 +460,11 @@ func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
 
 	dave := newMockServer(t, "save")
-	invoice, err := n.makePayment(dave, amount)
+	invoice, err := n.makePayment([]Peer{
+		n.aliceServer,
+		n.bobServer,
+		dave,
+	}, amount)
 	if err == nil {
 		t.Fatal("error haven't been received")
 	} else if err.Error() != errors.New(lnwire.UnknownDestination).Error() {
@@ -510,7 +525,11 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 	aliceBandwidthBefore := n.aliceChannelLink.Bandwidth()
 
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	invoice, err := n.makePayment(n.carolServer, amount)
+	invoice, err := n.makePayment([]Peer{
+		n.aliceServer,
+		n.bobServer,
+		n.carolServer,
+	}, amount)
 	if err == nil {
 		t.Fatal("error haven't been received")
 	} else if err.Error() != errors.New(lnwire.SphinxParseError).Error() {
@@ -644,7 +663,10 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 	// * settle request to be sent back from alice to bob
 	// * alice<->bob commitment state to be updated
 	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
-	if _, err := n.makePayment(n.bobServer, amount); err != nil {
+	if _, err := n.makePayment([]Peer{
+		n.aliceServer,
+		n.bobServer,
+	}, amount); err != nil {
 		t.Fatalf("unable to make the payment: %v", err)
 	}
 }
