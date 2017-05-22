@@ -59,6 +59,8 @@ func (s *mockServer) Start() error {
 		return nil
 	}
 
+	s.htlcSwitch.Start()
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -189,12 +191,26 @@ func (s *mockServer) readHandler(message lnwire.Message) error {
 
 	// Dispatch the commitment update message to the proper
 	// channel link dedicated to this channel.
-	link, err := s.htlcSwitch.getLink(targetChan)
+	link, err := s.htlcSwitch.GetLink(targetChan)
 	if err != nil {
 		return err
 	}
 
-	link.HandleChannelUpdate(message)
+	// Create goroutine for this, in order to be able to properly stop
+	// the server when handler stacked (server unavailable)
+	done := make(chan struct{})
+	go func() {
+		defer func() {
+			done <- struct{}{}
+		}()
+
+		link.HandleChannelUpdate(message)
+	}()
+	select {
+	case <-done:
+	case <-s.quit:
+	}
+
 	return nil
 }
 
@@ -220,7 +236,7 @@ func (s *mockServer) Stop() {
 		return
 	}
 
-	s.htlcSwitch.Stop()
+	go s.htlcSwitch.Stop()
 
 	close(s.quit)
 	s.wg.Wait()

@@ -377,9 +377,25 @@ func (n *threeHopNetwork) start() error {
 
 // stop stops nodes and cleanup its databases.
 func (n *threeHopNetwork) stop() {
-	n.aliceServer.Stop()
-	n.bobServer.Stop()
-	n.carolServer.Stop()
+	done := make(chan struct{})
+	go func() {
+		n.aliceServer.Stop()
+		done <- struct{}{}
+	}()
+
+	go func() {
+		n.bobServer.Stop()
+		done <- struct{}{}
+	}()
+
+	go func() {
+		n.carolServer.Stop()
+		done <- struct{}{}
+	}()
+
+	for i := 0; i < 3; i++ {
+		<-done
+	}
 
 	n.firstChannelCleanup()
 	n.secondChannelCleanup()
@@ -404,19 +420,8 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 
 	// Create three peers/servers.
 	aliceServer := newMockServer(t, "alice")
-	if err := aliceServer.htlcSwitch.Start(); err != nil {
-		t.Fatalf("unable to start htlc switch: %v", err)
-	}
-
 	bobServer := newMockServer(t, "bob")
-	if err := bobServer.htlcSwitch.Start(); err != nil {
-		t.Fatalf("unable to start htlc switch: %v", err)
-	}
-
 	carolServer := newMockServer(t, "carol")
-	if err := carolServer.htlcSwitch.Start(); err != nil {
-		t.Fatalf("unable to start htlc switch: %v", err)
-	}
 
 	// Create mock decoder instead of sphinx one in order to mock the
 	// route which htlc should follow.
@@ -426,13 +431,13 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 	aliceChannel, firstBobChannel, fCleanUp, err := createTestChannel(
 		alicePrivKey, bobPrivKey, aliceToBob, aliceToBob)
 	if err != nil {
-		t.Fatalf("can't create alice<->bob channel: %v", err)
+		t.Fatalf("unable to create alice<->bob channel: %v", err)
 	}
 
 	secondBobChannel, carolChannel, sCleanUp, err := createTestChannel(
 		bobPrivKey, carolPrivKey, bobToCarol, bobToCarol)
 	if err != nil {
-		t.Fatalf("can't create bob<->carol channel: %v", err)
+		t.Fatalf("unable to create bob<->carol channel: %v", err)
 	}
 
 	aliceChannelLink := NewChannelLink(
@@ -445,8 +450,8 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 			DecodeOnion: decoder.Decode,
 			Registry:    aliceServer.registry,
 		}, aliceChannel)
-	if err := aliceServer.htlcSwitch.AddLink(aliceChannelLink); err != nil {
-		t.Fatalf("can't add alice channel link: %v", err)
+	if err := aliceServer.htlcSwitch.addLink(aliceChannelLink); err != nil {
+		t.Fatalf("unable to add alice channel link: %v", err)
 	}
 
 	firstBobChannelLink := NewChannelLink(
@@ -456,8 +461,8 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 			DecodeOnion: decoder.Decode,
 			Registry:    bobServer.registry,
 		}, firstBobChannel)
-	if err := bobServer.htlcSwitch.AddLink(firstBobChannelLink); err != nil {
-		t.Fatalf("can't add first bob channel link: %v", err)
+	if err := bobServer.htlcSwitch.addLink(firstBobChannelLink); err != nil {
+		t.Fatalf("unable to add first bob channel link: %v", err)
 	}
 
 	secondBobChannelLink := NewChannelLink(
@@ -468,8 +473,8 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 			Registry:    bobServer.registry,
 		}, secondBobChannel)
 
-	if err := bobServer.htlcSwitch.AddLink(secondBobChannelLink); err != nil {
-		t.Fatalf("can't add second bob channel link: %v", err)
+	if err := bobServer.htlcSwitch.addLink(secondBobChannelLink); err != nil {
+		t.Fatalf("unable to add second bob channel link: %v", err)
 	}
 
 	carolChannelLink := NewChannelLink(
@@ -479,8 +484,8 @@ func newThreeHopNetwork(t *testing.T, aliceToBob,
 			DecodeOnion: decoder.Decode,
 			Registry:    carolServer.registry,
 		}, carolChannel)
-	if err := carolServer.htlcSwitch.AddLink(carolChannelLink); err != nil {
-		t.Fatalf("can't add carol channel link: %v", err)
+	if err := carolServer.htlcSwitch.addLink(carolChannelLink); err != nil {
+		t.Fatalf("unable to add carol channel link: %v", err)
 	}
 
 	return &threeHopNetwork{
