@@ -8,6 +8,8 @@ import (
 
 	"io"
 
+	"sync/atomic"
+
 	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -21,14 +23,19 @@ import (
 )
 
 type mockServer struct {
-	t           *testing.T
-	name        string
-	messages    chan lnwire.Message
-	quit        chan bool
-	id          []byte
-	registry    *mockInvoiceRegistry
-	htlcSwitch  *Switch
-	wg          sync.WaitGroup
+	started  int32
+	shutdown int32
+	wg       sync.WaitGroup
+	quit     chan bool
+
+	t        *testing.T
+	name     string
+	messages chan lnwire.Message
+
+	id         []byte
+	registry   *mockInvoiceRegistry
+	htlcSwitch *Switch
+
 	recordFuncs []func(lnwire.Message)
 }
 
@@ -40,7 +47,7 @@ func newMockServer(t *testing.T, name string) *mockServer {
 		id:          []byte(name),
 		name:        name,
 		registry:    newMockRegistry(),
-		messages:    make(chan lnwire.Message, 50),
+		messages:    make(chan lnwire.Message, 3000),
 		quit:        make(chan bool),
 		htlcSwitch:  New(Config{}),
 		recordFuncs: make([]func(lnwire.Message), 0),
@@ -48,6 +55,10 @@ func newMockServer(t *testing.T, name string) *mockServer {
 }
 
 func (s *mockServer) Start() error {
+	if !atomic.CompareAndSwapInt32(&s.started, 0, 1) {
+		return nil
+	}
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -196,6 +207,7 @@ func (s *mockServer) PubKey() []byte {
 }
 
 func (s *mockServer) Disconnect() {
+	s.Stop()
 	s.t.Fatalf("server %v was disconnected", s.name)
 }
 
@@ -204,13 +216,14 @@ func (s *mockServer) WipeChannel(*lnwallet.LightningChannel) error {
 }
 
 func (s *mockServer) Stop() {
-	close(s.quit)
-}
-
-func (s *mockServer) Wait() {
-	s.wg.Wait()
+	if !atomic.CompareAndSwapInt32(&s.shutdown, 0, 1) {
+		return
+	}
 
 	s.htlcSwitch.Stop()
+
+	close(s.quit)
+	s.wg.Wait()
 }
 
 func (s *mockServer) String() string {
@@ -252,6 +265,7 @@ func (f *mockChannelLink) Stop()                     {}
 var _ ChannelLink = (*mockChannelLink)(nil)
 
 type mockInvoiceRegistry struct {
+	sync.Mutex
 	invoices map[chainhash.Hash]*channeldb.Invoice
 }
 
@@ -262,6 +276,9 @@ func newMockRegistry() *mockInvoiceRegistry {
 }
 
 func (i *mockInvoiceRegistry) LookupInvoice(rHash chainhash.Hash) (*channeldb.Invoice, error) {
+	i.Lock()
+	defer i.Unlock()
+
 	invoice, ok := i.invoices[rHash]
 	if !ok {
 		return nil, errors.New("can't find mock invoice")
@@ -271,15 +288,23 @@ func (i *mockInvoiceRegistry) LookupInvoice(rHash chainhash.Hash) (*channeldb.In
 }
 
 func (i *mockInvoiceRegistry) SettleInvoice(rhash chainhash.Hash) error {
+
 	invoice, err := i.LookupInvoice(rhash)
 	if err != nil {
 		return err
 	}
+
+	i.Lock()
 	invoice.Terms.Settled = true
+	i.Unlock()
+
 	return nil
 }
 
 func (i *mockInvoiceRegistry) AddInvoice(invoice *channeldb.Invoice) error {
+	i.Lock()
+	defer i.Unlock()
+
 	rhash := fastsha256.Sum256(invoice.Terms.PaymentPreimage[:])
 	i.invoices[chainhash.Hash(rhash)] = invoice
 	return nil
