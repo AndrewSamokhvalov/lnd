@@ -319,17 +319,12 @@ type threeHopNetwork struct {
 // * from Alice to Bob
 // * from Alice to Carol through the Bob
 // * from Alice to some another peer through the Bob
-func (n *threeHopNetwork) makePayment(peer Peer,
+func (n *threeHopNetwork) makePayment(peers []Peer,
 	amount btcutil.Amount) (*channeldb.Invoice, error) {
 
-	var peers []Peer
-	if !bytes.Equal(peer.PubKey(), n.bobServer.PubKey()) {
-		// The payment always goes from Alice to Bob to somebody
-		// else, but if payment goes to the bob server itself we
-		// shouldn't add it as intermediary.
-		peers = append(peers, n.bobServer)
-	}
-	peers = append(peers, peer)
+	// Extract sender peer.
+	senderPeer := peers[0].(*mockServer)
+	peers = peers[1:]
 
 	// Generate route convert it to blob, and return next destination for
 	// htlc add request.
@@ -345,22 +340,22 @@ func (n *threeHopNetwork) makePayment(peer Peer,
 	}
 
 	// Check who is last in the route and add invoice to server registry.
-	lastPeer := peers[len(peers)-1].(*mockServer)
-	if err := lastPeer.registry.AddInvoice(invoice); err != nil {
+	receiverPeer := peers[len(peers)-1].(*mockServer)
+	if err := receiverPeer.registry.AddInvoice(invoice); err != nil {
 		return nil, err
 	}
 
 	// Send payment and expose err channel.
 	errChan := make(chan error)
 	go func() {
-		_, err := n.aliceServer.htlcSwitch.SendHTLC(firstNode, htlc)
+		_, err := senderPeer.htlcSwitch.SendHTLC(firstNode, htlc)
 		errChan <- err
 	}()
 
 	select {
 	case err := <-errChan:
 		return invoice, err
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		return invoice, errors.New("htlc was no settled in time")
 	}
 }
@@ -383,13 +378,8 @@ func (n *threeHopNetwork) start() error {
 // stop stops nodes and cleanup its databases.
 func (n *threeHopNetwork) stop() {
 	n.aliceServer.Stop()
-	n.aliceServer.Wait()
-
-	n.carolServer.Stop()
-	n.carolServer.Wait()
-
 	n.bobServer.Stop()
-	n.bobServer.Wait()
+	n.carolServer.Stop()
 
 	n.firstChannelCleanup()
 	n.secondChannelCleanup()
