@@ -203,14 +203,18 @@ func createTestChannel(alicePrivKey, bobPrivKey []byte,
 
 	aliceSigner := &mockSigner{aliceKeyPriv}
 	bobSigner := &mockSigner{bobKeyPriv}
+	estimator := &lnwallet.StaticFeeEstimator{
+		FeeRate:      24,
+		Confirmation: 6,
+	}
 
 	channelAlice, err := lnwallet.NewLightningChannel(aliceSigner,
-		nil, aliceChannelState)
+		nil, estimator, aliceChannelState)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	channelBob, err := lnwallet.NewLightningChannel(bobSigner, nil,
-		bobChannelState)
+		estimator, bobChannelState)
 	if err != nil {
 		return nil, nil, nil, err
 	}
