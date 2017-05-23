@@ -9,6 +9,8 @@ import (
 
 	"io"
 
+	"encoding/hex"
+
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/roasbeef/btcd/btcec"
@@ -92,6 +94,15 @@ type channelLink struct {
 	// channel to the handler function.
 	downstream chan *htlcPacket
 
+	// control is used to propagate the commands to its handlers. This
+	// channel is needed in order to handle commands in sequence manner,
+	// i.e in the main handler loop.
+	control chan interface{}
+
+	// queue is used to store the htlc add updates which haven't been
+	// processed because of the commitment trancation overflow.
+	queue *packetQueue
+
 	started  int32
 	shutdown int32
 	wg       sync.WaitGroup
@@ -108,7 +119,9 @@ func NewChannelLink(cfg *ChannelLinkConfig,
 		blobs:         make(map[uint64][lnwire.OnionPacketSize]byte),
 		upstream:      make(chan lnwire.Message),
 		downstream:    make(chan *htlcPacket),
+		control:       make(chan interface{}),
 		cancelReasons: make(map[uint64]lnwire.OpaqueReason),
+		queue:         newWaitingQueue(),
 		quit:          make(chan struct{}),
 	}
 }
@@ -162,8 +175,7 @@ func (l *channelLink) htlcHandler() {
 	defer l.wg.Done()
 
 	log.Infof("HTLC manager for ChannelPoint(%v) started, "+
-		"bandwidth=%v",
-		l.channel.ChannelPoint(), l.Bandwidth())
+		"bandwidth=%v", l.channel.ChannelPoint(), l.getBandwidth())
 
 	// A new session for this active channel has just started, therefore we
 	// need to send our initial revocation window to the remote peer.
@@ -243,11 +255,41 @@ out:
 				break out
 			}
 
+		// Previously add update have been added to the reprocessing
+		// queue because of the overflooding threat, and now we are
+		// trying to process it again.
+		case packet := <-l.queue.pending:
+			msg := packet.htlc.(*lnwire.UpdateAddHTLC)
+			log.Infof("reprocess downstream add update "+
+				"with payment hash(%v)",
+				hex.EncodeToString(msg.PaymentHash[:]))
+			l.handleDownStreamPkt(packet)
+
 		case pkt := <-l.downstream:
+			// If we have non empty processing queue than in
+			// order to preserve the order of add updates
+			// consume it, and process it later.
+			htlc, ok := pkt.htlc.(*lnwire.UpdateAddHTLC)
+			if ok && l.queue.length() != 0 {
+				log.Infof("Downstream htlc add update with "+
+					"payment hash(%v) have been added to "+
+					"reprocessing queue, batch: %v",
+					hex.EncodeToString(htlc.PaymentHash[:]),
+					l.batchCounter)
+
+				l.queue.consume(pkt)
+				continue
+			}
 			l.handleDownStreamPkt(pkt)
 
 		case msg := <-l.upstream:
 			l.handleUpstreamMsg(msg)
+
+		case cmd := <-l.control:
+			switch cmd := cmd.(type) {
+			case *getBandwidthCmd:
+				cmd.done <- l.getBandwidth()
+			}
 
 		case <-l.quit:
 			break out
@@ -271,21 +313,35 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
 		// chains.
 		htlc.ChanID = l.ChanID()
 		index, err := l.channel.AddHTLC(htlc)
-		if err != nil {
+		if err == lnwallet.ErrMaxHTLCNumber {
+			log.Infof("Downstream htlc add update with "+
+				"payment hash(%v) have been added to "+
+				"reprocessing queue, batch: %v",
+				hex.EncodeToString(htlc.PaymentHash[:]),
+				l.batchCounter)
+			l.queue.consume(pkt)
+			return
+		} else if err != nil {
 			// TODO: possibly perform fallback/retry logic
 			// depending on type of error
 
 			// The HTLC was unable to be added to the state
 			// machine, as a result, we'll signal the switch to
 			// cancel the pending payment.
-			l.cfg.Switch.forward(newFailPacket(l.ChanID(),
+			go l.cfg.Switch.forward(newFailPacket(l.ChanID(),
 				&lnwire.UpdateFailHTLC{
 					Reason: []byte{byte(0)},
 				}, htlc.PaymentHash, htlc.Amount))
 
-			log.Errorf("adding HTLC rejected: %v", err)
+			log.Errorf("unable to handle downstream add HTLC: %v",
+				err)
 			return
 		}
+		log.Tracef("(%v) Receive downstream htlc with payment hash"+
+			"(%v), assign the index: %v, batch: %v",
+			hex.EncodeToString(l.Peer().PubKey()),
+			hex.EncodeToString(htlc.PaymentHash[:]),
+			index, l.batchCounter+1)
 		htlc.ID = index
 
 		l.cfg.Peer.SendMessage(htlc)
@@ -364,10 +420,15 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		// "settle" list in the event that we know the preimage
 		index, err := l.channel.ReceiveHTLC(msg)
 		if err != nil {
-			log.Errorf("Receiving HTLC rejected: %v", err)
+			log.Errorf("unable to handle upstream add HTLC: %v",
+				err)
 			l.cfg.Peer.Disconnect()
 			return
 		}
+		log.Tracef("(%v) Receive upstream htlc with payment hash(%v), "+
+			"assign the index: %v",
+			hex.EncodeToString(l.Peer().PubKey()),
+			hex.EncodeToString(msg.PaymentHash[:]), index)
 
 		// TODO(roasbeef): perform sanity checks on per-hop payload
 		//  * time-lock is sane, fee, chain, etc
@@ -382,8 +443,8 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 		idx := msg.ID
 		if err := l.channel.ReceiveHTLCSettle(pre, idx); err != nil {
 			// TODO(roasbeef): broadcast on-chain
-			log.Errorf("settle for outgoing HTLC "+
-				"rejected: %v", err)
+			log.Errorf("(%v) unable to handle upstream settle "+
+				"HTLC: %v", hex.EncodeToString(l.Peer().PubKey()), err)
 			l.cfg.Peer.Disconnect()
 			return
 		}
@@ -393,8 +454,8 @@ func (l *channelLink) handleUpstreamMsg(msg lnwire.Message) {
 	case *lnwire.UpdateFailHTLC:
 		idx := msg.ID
 		if err := l.channel.ReceiveFailHTLC(idx); err != nil {
-			log.Errorf("unable to recv HTLC cancel: %v",
-				err)
+			log.Errorf("unable to handle upstream fail HTLC: "+
+				"%v", err)
 			l.cfg.Peer.Disconnect()
 			return
 		}
@@ -508,12 +569,34 @@ func (l *channelLink) ChanID() lnwire.ChannelID {
 	return lnwire.NewChanIDFromOutPoint(l.channel.ChannelPoint())
 }
 
+// getBandwidthCmd is a wrapper for get bandwidth handler.
+type getBandwidthCmd struct {
+	done chan btcutil.Amount
+}
+
 // Bandwidth returns the amount which current link might pass
-// through channel link.
+// through channel link. Execution through control channel gives as
+// confidence that bandwidth will not be changed during function execution.
 // NOTE: Part of the ChannelLink interface.
 func (l *channelLink) Bandwidth() btcutil.Amount {
-	snapshot := l.channel.StateSnapshot()
-	return snapshot.LocalBalance
+	command := &getBandwidthCmd{
+		done: make(chan btcutil.Amount, 1),
+	}
+
+	select {
+	case l.control <- command:
+		return <-command.done
+	case <-l.quit:
+		return 0
+	}
+}
+
+// getBandwidth returns the amount which current link might pass
+// through channel link.
+// NOTE: Should be use inside main goroutine only, otherwise the result might
+// be accurate.
+func (l *channelLink) getBandwidth() btcutil.Amount {
+	return l.channel.LocalAvailableBalance() - l.queue.pendingAmount()
 }
 
 // Stats return the statistics of channel link.
@@ -576,6 +659,7 @@ func (l *channelLink) processLockedInHtlcs(
 					&lnwire.UpdateFufillHTLC{
 						PaymentPreimage: pd.RPreimage,
 					}, pd.RHash, pd.Amount))
+			l.queue.release()
 
 		case lnwallet.Fail:
 			opaqueReason := l.cancelReasons[pd.ParentIndex]
@@ -590,6 +674,7 @@ func (l *channelLink) processLockedInHtlcs(
 						Reason: opaqueReason,
 						ChanID: l.ChanID(),
 					}, pd.RHash, pd.Amount))
+			l.queue.release()
 
 		case lnwallet.Add:
 			blob := l.blobs[pd.Index]
@@ -722,7 +807,7 @@ func (l *channelLink) sendHTLCError(rHash [32]byte,
 
 	index, err := l.channel.FailHTLC(rHash)
 	if err != nil {
-		log.Errorf("can't cancel htlc: %v", err)
+		log.Errorf("unable cancel htlc: %v", err)
 		return
 	}
 
