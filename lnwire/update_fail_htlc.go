@@ -1,33 +1,19 @@
 package lnwire
 
-import (
-	"errors"
-	"io"
-)
+import "io"
 
 // OpaqueReason is an opaque encrypted byte slice that encodes the exact
 // failure reason and additional some supplemental data. The contents of this
 // slice can only be decrypted by the sender of the original HTLC.
 type OpaqueReason []byte
 
-// ToFailCode converts the reason in fail code.
-// TODO(andrew.shvv) Future version of this method should implement
-// decryption opaque reason logic.
-func (r OpaqueReason) ToFailCode() (FailCode, error) {
-	if len(r) != 1 {
-		return 0, errors.New("wrong opaque code length")
-	}
-
-	return FailCode(r[0]), nil
-}
-
 // UpdateFailHTLC is sent by Alice to Bob in order to remove a previously added
 // HTLC. Upon receipt of an UpdateFailHTLC the HTLC should be removed from the
 // next commitment transaction, with the UpdateFailHTLC propagated backwards in
 // the route to fully undo the HTLC.
 type UpdateFailHTLC struct {
-	// ChannelPoint is the particular active channel that this
-	// UpdateFailHTLC is bound to.
+	// ChanIDPoint is the particular active channel that this UpdateFailHTLC
+	// is bound to.
 	ChanID ChannelID
 
 	// ID references which HTLC on the remote node's commitment transaction
@@ -37,7 +23,6 @@ type UpdateFailHTLC struct {
 	// Reason is an onion-encrypted blob that details why the HTLC was
 	// failed. This blob is only fully decryptable by the initiator of the
 	// HTLC message.
-	// TODO(roasbeef): properly format the encrypted failure reason
 	Reason OpaqueReason
 }
 

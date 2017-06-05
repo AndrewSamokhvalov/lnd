@@ -40,6 +40,8 @@ const (
 // unaltered to the source of the HTLC within the route.
 type FailCode uint16
 
+// The currently defined onion failue types within this current version of the
+// Lightning protocol.
 const (
 	CodeInvalidRealm                  FailCode = FlagBadOnion | 1
 	CodeTemporaryNodeFailure                   = FlagNode | 2
@@ -59,9 +61,12 @@ const (
 	CodeChannelDisabled                        = FlagUpdate | 20
 	CodeUnknownPaymentHash                     = FlagPerm | 15
 	CodeIncorrectPaymentAmount                 = FlagPerm | 16
-	CodeFinalExpiryTooSoon                     = 17
-	CodeFinalIncorrectCltvExpiry               = 18
-	CodeFinalIncorrectHtlcAmount               = 19
+	CodeFinalExpiryTooSoon            FailCode = 17
+	CodeFinalIncorrectCltvExpiry      FailCode = 18
+	CodeFinalIncorrectHtlcAmount      FailCode = 19
+
+	// TODO(andrew.shvv) chage specificaition and include this code.
+	CodeInsufficientCapacity FailCode = 999
 )
 
 // String returns string representation of the failure code.
@@ -130,9 +135,23 @@ func (c FailCode) String() string {
 	case CodeFinalIncorrectHtlcAmount:
 		return "FinalIncorrectHtlcAmount"
 
+	case CodeInsufficientCapacity:
+		return "CodeInsufficientCapacity"
+
 	default:
 		return "<unknown>"
 	}
+}
+
+// FailInsufficientCapacity is returned if capacity in channel is insufficient
+// in order to send htlc.
+// NOTE: might be returned by any node.
+type FailInsufficientCapacity struct{}
+
+// Code returns the failure unique code.
+// NOTE: Part of the Failure interface.
+func (f FailInsufficientCapacity) Code() FailCode {
+	return CodeInsufficientCapacity
 }
 
 // FailInvalidRealm is returned if the realm byte is unknown.
@@ -395,7 +414,7 @@ type FailAmountBelowMinimum struct {
 	Update   *ChannelUpdate
 }
 
-//
+// NewAmountBelowMinimum creates new instance of the FailAmountBelowMinimum.
 func NewAmountBelowMinimum(htlcMsat btcutil.Amount,
 	update *ChannelUpdate) *FailAmountBelowMinimum {
 	return &FailAmountBelowMinimum{
@@ -873,6 +892,10 @@ func makeEmptyOnionError(code FailCode) (Failure, error) {
 
 	case CodeFinalIncorrectHtlcAmount:
 		return &FailFinalIncorrectHtlcAmount{}, nil
+
+	case CodeInsufficientCapacity:
+		return &FailInsufficientCapacity{}, nil
+
 	default:
 		return nil, errors.Errorf("unknown error code: %v", code)
 	}

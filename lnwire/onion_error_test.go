@@ -32,6 +32,7 @@ var onionFailures = []Failure{
 	&FailUnknownPaymentHash{},
 	&FailIncorrectPaymentAmount{},
 	&FailFinalExpiryTooSoon{},
+	&FailInsufficientCapacity{},
 
 	NewInvalidOnionVersion(testOnionHash),
 	NewInvalidOnionHmac(testOnionHash),
