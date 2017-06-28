@@ -326,6 +326,23 @@ func TestLightningWireProtocol(t *testing.T) {
 
 			v[0] = reflect.ValueOf(*req)
 		},
+		MsgUpdateFailMalformedHTLC: func(v []reflect.Value, r *rand.Rand) {
+			req := &UpdateFailMalformedHTLC{}
+
+			if _, err := r.Read(req.ChanID[:]); err != nil {
+				t.Fatalf("unable to generate chan id: %v", err)
+				return
+			}
+			req.ID = uint64(r.Int63())
+
+			if _, err := r.Read(req.ShaOnionBlob[:]); err != nil {
+				t.Fatalf("unable to generate htlc id: %v", err)
+				return
+			}
+			req.FailureCode = FailCode(r.Int31()) % math.MaxUint16
+
+			v[0] = reflect.ValueOf(*req)
+		},
 		MsgChannelAnnouncement: func(v []reflect.Value, r *rand.Rand) {
 			req := ChannelAnnouncement{
 				ShortChannelID: NewShortChanIDFromInt(uint64(r.Int63())),
@@ -520,6 +537,12 @@ func TestLightningWireProtocol(t *testing.T) {
 		{
 			msgType: MsgRevokeAndAck,
 			scenario: func(m RevokeAndAck) bool {
+				return mainScenario(&m)
+			},
+		},
+		{
+			msgType: MsgUpdateFailMalformedHTLC,
+			scenario: func(m UpdateFailMalformedHTLC) bool {
 				return mainScenario(&m)
 			},
 		},

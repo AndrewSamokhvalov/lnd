@@ -39,6 +39,7 @@ const (
 	MsgUpdateFailHTLC                        = 131
 	MsgCommitSig                             = 132
 	MsgRevokeAndAck                          = 133
+	MsgUpdateFailMalformedHTLC               = 135
 	MsgChannelAnnouncement                   = 256
 	MsgNodeAnnouncement                      = 257
 	MsgChannelUpdate                         = 258
@@ -74,6 +75,8 @@ func (t MessageType) String() string {
 		return "CommitSig"
 	case MsgRevokeAndAck:
 		return "RevokeAndAck"
+	case MsgUpdateFailMalformedHTLC:
+		return "UpdateFailMalformedHTLC"
 	case MsgError:
 		return "Error"
 	case MsgChannelAnnouncement:
@@ -155,6 +158,8 @@ func makeEmptyMessage(msgType MessageType) (Message, error) {
 		msg = &CommitSig{}
 	case MsgRevokeAndAck:
 		msg = &RevokeAndAck{}
+	case MsgUpdateFailMalformedHTLC:
+		msg = &UpdateFailMalformedHTLC{}
 	case MsgError:
 		msg = &Error{}
 	case MsgChannelAnnouncement:
