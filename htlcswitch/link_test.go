@@ -14,6 +14,7 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/go-errors/errors"
+	"github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
@@ -376,7 +377,7 @@ func TestExitNodeTimelockPayloadMismatch(t *testing.T) {
 		n.bobServer.PubKey(), hops, amount, htlcAmt, htlcExpiry)
 	if err == nil {
 		t.Fatalf("payment should have failed but didn't")
-	} else if err.Error() != lnwire.UpstreamTimeout.String() {
+	} else if err.Error() != lnwire.CodeFinalExpiryTooSoon.String() {
 		// TODO(roasbeef): use proper error after error propagation is
 		// in
 		t.Fatalf("incorrect error, expected insufficient value, "+
@@ -413,7 +414,7 @@ func TestExitNodeAmountPayloadMismatch(t *testing.T) {
 		n.bobServer.PubKey(), hops, amount, htlcAmt, htlcExpiry)
 	if err == nil {
 		t.Fatalf("payment should have failed but didn't")
-	} else if err.Error() != lnwire.IncorrectValue.String() {
+	} else if err.Error() != lnwire.CodeIncorrectPaymentAmount.String() {
 		// TODO(roasbeef): use proper error after error propagation is
 		// in
 		t.Fatalf("incorrect error, expected insufficient value, "+
@@ -455,10 +456,8 @@ func TestLinkForwardTimelockPolicyMismatch(t *testing.T) {
 	// should be rejected due to a policy violation.
 	if err == nil {
 		t.Fatalf("payment should have failed but didn't")
-	} else if err.Error() != lnwire.UpstreamTimeout.String() {
-		// TODO(roasbeef): use proper error after error propagation is
-		// in
-		t.Fatalf("incorrect error, expected insufficient value, "+
+	} else if err.Error() != lnwire.CodeIncorrectCltvExpiry.String() {
+		t.Fatalf("incorrect error, expected incorrect cltv expiry, "+
 			"instead have: %v", err)
 	}
 }
@@ -498,7 +497,7 @@ func TestLinkForwardFeePolicyMismatch(t *testing.T) {
 	// should be rejected due to a policy violation.
 	if err == nil {
 		t.Fatalf("payment should have failed but didn't")
-	} else if err.Error() != lnwire.IncorrectValue.String() {
+	} else if err.Error() != lnwire.CodeIncorrectPaymentAmount.String() {
 		// TODO(roasbeef): use proper error after error propagation is
 		// in
 		t.Fatalf("incorrect error, expected insufficient value, "+
@@ -541,7 +540,7 @@ func TestLinkForwardMinHTLCPolicyMismatch(t *testing.T) {
 	// should be rejected due to a policy violation (below min HTLC).
 	if err == nil {
 		t.Fatalf("payment should have failed but didn't")
-	} else if err.Error() != lnwire.IncorrectValue.String() {
+	} else if err.Error() != lnwire.CodeIncorrectPaymentAmount.String() {
 		// TODO(roasbeef): use proper error after error propagation is
 		// in
 		t.Fatalf("incorrect error, expected insufficient value, "+
@@ -633,7 +632,7 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 		btcutil.SatoshiPerBitcoin*5,
 	)
 	if err := n.start(); err != nil {
-		t.Fatalf("can't start three hop network: %v", err)
+		t.Fatalf("unable to start three hop network: %v", err)
 	}
 	defer n.stop()
 
@@ -656,7 +655,7 @@ func TestChannelLinkMultiHopInsufficientPayment(t *testing.T) {
 		n.bobServer.PubKey(), hops, amount, htlcAmt, totalTimelock)
 	if err == nil {
 		t.Fatal("error haven't been received")
-	} else if err.Error() != errors.New(lnwire.InsufficientCapacity).Error() {
+	} else if err.Error() != errors.New(lnwire.CodeInsufficientCapacity).Error() {
 		t.Fatalf("wrong error have been received: %v", err)
 	}
 
@@ -702,7 +701,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 		btcutil.SatoshiPerBitcoin*5,
 	)
 	if err := n.start(); err != nil {
-		t.Fatalf("can't start three hop network: %v", err)
+		t.Fatalf("unable to start three hop network: %v", err)
 	}
 	defer n.stop()
 
@@ -733,13 +732,14 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 
 	// Check who is last in the route and add invoice to server registry.
 	if err := n.carolServer.registry.AddInvoice(invoice); err != nil {
-		t.Fatalf("can't add invoice in carol registry: %v", err)
+		t.Fatalf("unable to add invoice in carol registry: %v", err)
 	}
 
 	// Send payment and expose err channel.
-	_, err = n.aliceServer.htlcSwitch.SendHTLC(n.bobServer.PubKey(), htlc)
-	if err == nil {
-		t.Fatal("error wasn't received")
+	_, err = n.aliceServer.htlcSwitch.SendHTLC(n.bobServer.PubKey(), htlc,
+		newMockDeobfuscator())
+	if err.Error() != lnwire.CodeUnknownPaymentHash.String() {
+		t.Fatal("error haven't been received")
 	}
 
 	// Wait for Alice to receive the revocation.
@@ -802,7 +802,7 @@ func TestChannelLinkMultiHopUnknownNextHop(t *testing.T) {
 		amount, htlcAmt, totalTimelock)
 	if err == nil {
 		t.Fatal("error haven't been received")
-	} else if err.Error() != errors.New(lnwire.UnknownDestination).Error() {
+	} else if err.Error() != lnwire.CodeUnknownNextPeer.String() {
 		t.Fatalf("wrong error have been received: %v", err)
 	}
 
@@ -848,14 +848,14 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 		btcutil.SatoshiPerBitcoin*5,
 	)
 	if err := n.start(); err != nil {
-		t.Fatalf("can't start three hop network: %v", err)
+		t.Fatalf("unable to start three hop network: %v", err)
 	}
 	defer n.stop()
 
 	// Replace decode function with another which throws an error.
-	n.carolChannelLink.cfg.DecodeOnion = func(r io.Reader, meta []byte) (
-		HopIterator, error) {
-		return nil, errors.New("some sphinx decode error")
+	n.carolChannelLink.cfg.GetHopIterator = func(
+		r io.Reader, meta []byte) (HopIterator, error) {
+		return nil, sphinx.ErrInvalidOnionVersion
 	}
 
 	carolBandwidthBefore := n.carolChannelLink.Bandwidth()
@@ -871,7 +871,7 @@ func TestChannelLinkMultiHopDecodeError(t *testing.T) {
 		n.bobServer.PubKey(), hops, amount, htlcAmt, totalTimelock)
 	if err == nil {
 		t.Fatal("error haven't been received")
-	} else if err.Error() != errors.New(lnwire.SphinxParseError).Error() {
+	} else if err.Error() != lnwire.CodeInvalidOnionVersion.String() {
 		t.Fatalf("wrong error have been received: %v", err)
 	}
 
@@ -994,7 +994,7 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 	})
 
 	if err := n.start(); err != nil {
-		t.Fatalf("can't start three hop network: %v", err)
+		t.Fatalf("unable to start three hop network: %v", err)
 	}
 	defer n.stop()
 

@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync/atomic"
 
+	"bytes"
+
 	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/chainntnfs"
@@ -147,11 +149,55 @@ func (f *ForwardingInfo) encode(w io.Writer) error {
 
 var _ HopIterator = (*mockHopIterator)(nil)
 
+// mockObfuscator mock implementation of the failure obfuscator which only
+// encodes the failure and do not makes any onion obfuscation.
+type mockObfuscator struct{}
+
+func newMockObfuscator() Obfuscator {
+	return &mockObfuscator{}
+}
+
+func (o *mockObfuscator) InitialObfuscate(failure lnwire.Failure) (
+	lnwire.OpaqueReason, error) {
+
+	var b bytes.Buffer
+	if err := lnwire.EncodeFailure(&b, failure, 0); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+func (o *mockObfuscator) BackwardObfuscate(reason lnwire.OpaqueReason) lnwire.OpaqueReason {
+	return reason
+
+}
+
+// mockDeobfuscator mock implementation of the failure deobfuscator which
+// only decodes the failure do not makes any onion obfuscation.
+type mockDeobfuscator struct{}
+
+func newMockDeobfuscator() Deobfuscator {
+	return &mockDeobfuscator{}
+}
+
+func (o *mockDeobfuscator) Deobfuscate(reason lnwire.OpaqueReason) (lnwire.Failure,
+	error) {
+	r := bytes.NewReader(reason)
+	failure, err := lnwire.DecodeFailure(r, 0)
+	if err != nil {
+		return nil, err
+	}
+	return failure, nil
+}
+
+var _ Deobfuscator = (*mockDeobfuscator)(nil)
+
 // mockIteratorDecoder test version of hop iterator decoder which decodes the
 // encoded array of hops.
 type mockIteratorDecoder struct{}
 
-func (p *mockIteratorDecoder) Decode(r io.Reader, meta []byte) (HopIterator, error) {
+func (p *mockIteratorDecoder) GetHopIterator(r io.Reader, meta []byte) (
+	HopIterator, error) {
+
 	var b [4]byte
 	_, err := r.Read(b[:])
 	if err != nil {
