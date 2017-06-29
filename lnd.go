@@ -131,7 +131,7 @@ func lndMain() error {
 		},
 		SendAnnouncement: func(msg lnwire.Message) error {
 			server.discoverSrv.ProcessLocalAnnouncement(msg,
-				idPrivKey.PubKey())
+				idPrivKey.PubKey().SerializeCompressed())
 			return nil
 		},
 		ArbiterChan:    server.breachArbiter.newContracts,

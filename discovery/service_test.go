@@ -475,7 +475,7 @@ func TestProcessAnnouncement(t *testing.T) {
 		t.Fatalf("can't create node announcement: %v", err)
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(na, na.NodeID)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(na, na.NodeID.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("can't process remote announcement: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestProcessAnnouncement(t *testing.T) {
 		t.Fatalf("can't create channel announcement: %v", err)
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(ca, na.NodeID)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(ca, na.NodeID.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("can't process remote announcement: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestProcessAnnouncement(t *testing.T) {
 		t.Fatalf("can't create update announcement: %v", err)
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(ua, na.NodeID)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(ua, na.NodeID.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("can't process remote announcement: %v", err)
 	}
@@ -564,7 +564,7 @@ func TestPrematureAnnouncement(t *testing.T) {
 	}
 
 	select {
-	case <-ctx.gossiper.ProcessRemoteAnnouncement(ca, na.NodeID):
+	case <-ctx.gossiper.ProcessRemoteAnnouncement(ca, na.NodeID.SerializeCompressed()):
 		t.Fatal("announcement was proceeded")
 	case <-time.After(100 * time.Millisecond):
 	}
@@ -583,7 +583,7 @@ func TestPrematureAnnouncement(t *testing.T) {
 	}
 
 	select {
-	case <-ctx.gossiper.ProcessRemoteAnnouncement(ua, na.NodeID):
+	case <-ctx.gossiper.ProcessRemoteAnnouncement(ua, na.NodeID.SerializeCompressed()):
 		t.Fatal("announcement was proceeded")
 	case <-time.After(100 * time.Millisecond):
 	}
@@ -639,7 +639,8 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 
 	// Recreate lightning network topology. Initialize router with channel
 	// between two nodes.
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn,
+		localKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -649,7 +650,8 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn,
+		localKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -659,7 +661,8 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn, remoteKey)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn,
+		remoteKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -671,7 +674,8 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 
 	// Pretending that we receive local channel announcement from funding
 	// manager, thereby kick off the announcement exchange process.
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn,
+		localKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -696,7 +700,8 @@ func TestSignatureAnnouncementLocalFirst(t *testing.T) {
 		t.Fatal("wrong number of objects in storage")
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn, remoteKey)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
+		remoteKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -747,7 +752,8 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 	// manager, thereby kick off the announcement exchange process, in
 	// this case the announcement should be added in the orphan batch
 	// because we haven't announce the channel yet.
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn, remoteKey)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.remoteProofAnn,
+		remoteKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to proceed announcement: %v", err)
 	}
@@ -768,7 +774,8 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 
 	// Recreate lightning network topology. Initialize router with channel
 	// between two nodes.
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localChanAnn,
+		localKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -779,7 +786,8 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.chanUpdAnn,
+		localKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -789,7 +797,8 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 	case <-time.After(2 * trickleDelay):
 	}
 
-	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn, remoteKey)
+	err = <-ctx.gossiper.ProcessRemoteAnnouncement(batch.chanUpdAnn,
+		remoteKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}
@@ -801,7 +810,8 @@ func TestOrphanSignatureAnnouncement(t *testing.T) {
 
 	// After that we process local announcement, and waiting to receive
 	// the channel announcement.
-	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn, localKey)
+	err = <-ctx.gossiper.ProcessLocalAnnouncement(batch.localProofAnn,
+		localKey.SerializeCompressed())
 	if err != nil {
 		t.Fatalf("unable to process :%v", err)
 	}

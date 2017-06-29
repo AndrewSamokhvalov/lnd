@@ -19,7 +19,7 @@ import (
 // networkMsg couples a routing related wire message with the peer that
 // originally sent it.
 type networkMsg struct {
-	peer *btcec.PublicKey
+	peer []byte
 	msg  lnwire.Message
 
 	isRemote bool
@@ -210,7 +210,7 @@ func (d *AuthenticatedGossiper) Stop() {
 // peers.  Remote channel announcements should contain the announcement proof
 // and be fully validated.
 func (d *AuthenticatedGossiper) ProcessRemoteAnnouncement(msg lnwire.Message,
-	src *btcec.PublicKey) chan error {
+	src []byte) chan error {
 
 	nMsg := &networkMsg{
 		msg:      msg,
@@ -236,7 +236,7 @@ func (d *AuthenticatedGossiper) ProcessRemoteAnnouncement(msg lnwire.Message,
 // entire channel announcement and update messages will be re-constructed and
 // broadcast to the rest of the network.
 func (d *AuthenticatedGossiper) ProcessLocalAnnouncement(msg lnwire.Message,
-	src *btcec.PublicKey) chan error {
+	src []byte) chan error {
 
 	nMsg := &networkMsg{
 		msg:      msg,
@@ -708,9 +708,9 @@ func (d *AuthenticatedGossiper) processNetworkAnnouncement(nMsg *networkMsg) []l
 			return nil
 		}
 
-		isFirstNode := bytes.Equal(nMsg.peer.SerializeCompressed(),
+		isFirstNode := bytes.Equal(nMsg.peer,
 			chanInfo.NodeKey1.SerializeCompressed())
-		isSecondNode := bytes.Equal(nMsg.peer.SerializeCompressed(),
+		isSecondNode := bytes.Equal(nMsg.peer,
 			chanInfo.NodeKey2.SerializeCompressed())
 
 		// Ensure that channel that was retrieved belongs to the peer
