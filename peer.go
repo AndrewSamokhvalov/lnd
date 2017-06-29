@@ -508,7 +508,7 @@ out:
 			*lnwire.AnnounceSignatures:
 
 			p.server.discoverSrv.ProcessRemoteAnnouncement(msg,
-				p.addr.IdentityKey)
+				p.addr.IdentityKey.SerializeCompressed())
 		default:
 			peerLog.Errorf("unknown message received from peer "+
 				"%v", p)

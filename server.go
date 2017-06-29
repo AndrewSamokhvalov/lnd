@@ -176,6 +176,9 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 
 			peer.localCloseChanReqs <- request
 		},
+		UpdateTopology: func(msg *lnwire.ChannelUpdate) {
+			s.discoverSrv.ProcessRemoteAnnouncement(msg, nil)
+		},
 	})
 
 	// If external IP addresses have been specified, add those to the list
