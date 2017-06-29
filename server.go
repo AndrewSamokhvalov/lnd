@@ -71,7 +71,7 @@ type server struct {
 
 	utxoNursery *utxoNursery
 
-	sphinx *sphinx.Router
+	onionProcessor *htlcswitch.OnionProcessor
 
 	connMgr *connmgr.ConnManager
 
@@ -126,7 +126,8 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 
 		// TODO(roasbeef): derive proper onion key based on rotation
 		// schedule
-		sphinx:      sphinx.NewRouter(privKey, activeNetParams.Params),
+		onionProcessor: htlcswitch.NewOnionProcessor(
+			sphinx.NewRouter(privKey, activeNetParams.Params)),
 		lightningID: sha256.Sum256(serializedPubKey),
 
 		persistentPeers:    make(map[string]struct{}),
@@ -236,11 +237,11 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		Chain:     cc.chainIO,
 		ChainView: cc.chainView,
 		SendToSwitch: func(firstHop *btcec.PublicKey,
-			htlcAdd *lnwire.UpdateAddHTLC) ([32]byte, error) {
+			htlcAdd *lnwire.UpdateAddHTLC, deobfuscator htlcswitch.Deobfuscator) ([32]byte, error) {
 
 			var firstHopPub [33]byte
 			copy(firstHopPub[:], firstHop.SerializeCompressed())
-			return s.htlcSwitch.SendHTLC(firstHopPub, htlcAdd)
+			return s.htlcSwitch.SendHTLC(firstHopPub, htlcAdd, deobfuscator)
 		},
 	})
 	if err != nil {

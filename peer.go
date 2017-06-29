@@ -276,6 +276,33 @@ func (p *peer) Start() error {
 	return nil
 }
 
+// getEdgeInfo returns the channel edge info.
+// TODO(andrew.shvv) place it inside the router after it will be clear that
+// this method is needed inside the channel link.
+func (p *peer) getEdgeInfo(chanID lnwire.ChannelID) (*channeldb.ChannelEdgePolicy,
+	*channeldb.ChannelEdgePolicy, error) {
+	var edge1, edge2 *channeldb.ChannelEdgePolicy
+	cb := func(chanInfo *channeldb.ChannelEdgeInfo,
+		e1, e2 *channeldb.ChannelEdgePolicy) error {
+		if lnwire.NewChanIDFromOutPoint(&chanInfo.ChannelPoint) == chanID {
+			edge1 = e1
+			edge2 = e2
+		}
+		return nil
+	}
+
+	err := p.server.chanRouter.ForEachChannel(cb)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if edge1 == nil || edge2 == nil {
+		err := errors.New("unable to find channel by channel id")
+		return nil, nil, err
+	}
+	return edge1, edge2, err
+}
+
 // loadActiveChannels creates indexes within the peer for tracking all active
 // channels returned by the database.
 func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
@@ -306,16 +333,17 @@ func (p *peer) loadActiveChannels(chans []*channeldb.OpenChannel) error {
 		// Register this new channel link with the HTLC Switch. This is
 		// necessary to properly route multi-hop payments, and forward
 		// new payments triggered by RPC clients.
-		sphinxDecoder := htlcswitch.NewSphinxDecoder(p.server.sphinx)
 		link := htlcswitch.NewChannelLink(
 			htlcswitch.ChannelLinkConfig{
-				Peer:             p,
-				DecodeOnion:      sphinxDecoder.Decode,
-				SettledContracts: p.server.breachArbiter.settledContracts,
-				DebugHTLC:        cfg.DebugHTLC,
-				Registry:         p.server.invoices,
-				Switch:           p.server.htlcSwitch,
-				FwrdingPolicy:    p.server.cc.routingPolicy,
+				Peer:               p,
+				GetHopIterator:     p.server.onionProcessor.GetHopIterator,
+				GetOnionObfuscator: p.server.onionProcessor.GetOnionObfuscator,
+				GetChannelEdfeInfo: p.getEdgeInfo,
+				SettledContracts:   p.server.breachArbiter.settledContracts,
+				DebugHTLC:          cfg.DebugHTLC,
+				Registry:           p.server.invoices,
+				Switch:             p.server.htlcSwitch,
+				FwrdingPolicy:      p.server.cc.routingPolicy,
 			},
 			lnChan,
 		)
@@ -783,16 +811,17 @@ out:
 			peerLog.Infof("New channel active ChannelPoint(%v) "+
 				"with peerId(%v)", chanPoint, p.id)
 
-			decoder := htlcswitch.NewSphinxDecoder(p.server.sphinx)
 			link := htlcswitch.NewChannelLink(
 				htlcswitch.ChannelLinkConfig{
-					Peer:             p,
-					DecodeOnion:      decoder.Decode,
-					SettledContracts: p.server.breachArbiter.settledContracts,
-					DebugHTLC:        cfg.DebugHTLC,
-					Registry:         p.server.invoices,
-					Switch:           p.server.htlcSwitch,
-					FwrdingPolicy:    p.server.cc.routingPolicy,
+					Peer:               p,
+					GetHopIterator:     p.server.onionProcessor.GetHopIterator,
+					GetOnionObfuscator: p.server.onionProcessor.GetOnionObfuscator,
+					GetChannelEdfeInfo: p.getEdgeInfo,
+					SettledContracts:   p.server.breachArbiter.settledContracts,
+					DebugHTLC:          cfg.DebugHTLC,
+					Registry:           p.server.invoices,
+					Switch:             p.server.htlcSwitch,
+					FwrdingPolicy:      p.server.cc.routingPolicy,
 				},
 				newChanReq.channel,
 			)
