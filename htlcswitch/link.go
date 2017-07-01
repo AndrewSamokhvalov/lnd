@@ -11,8 +11,10 @@ import (
 
 	"crypto/sha256"
 
+	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lightning-onion"
+	"github.com/lightningnetwork/lnd/applications"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -933,40 +935,85 @@ func (l *channelLink) processLockedInHtlcs(
 			fwdInfo := chanIterator.ForwardingInstructions()
 			switch fwdInfo.NextHop {
 			case exitHop:
+				var preimage [sha256.Size]byte
+
 				// We're the designated payment destination.
 				// Therefore we attempt to see if we have an
 				// invoice locally which'll allow us to settle
 				// this htlc.
-				invoiceHash := chainhash.Hash(pd.RHash)
-				invoice, err := l.cfg.Registry.LookupInvoice(invoiceHash)
+				paymentHash := chainhash.Hash(pd.RHash)
+				invoice, err := l.cfg.Registry.LookupInvoice(paymentHash)
 				if err != nil {
-					log.Errorf("unable to query to locate:"+
-						" %v", err)
-					failure := lnwire.FailUnknownPaymentHash{}
-					l.sendHTLCError(pd.RHash, failure, obfuscator)
-					needUpdate = true
-					continue
+					// If we were unable to find invoice, than trying to read
+					// e2e payload and decode the sphinx payment.
+					e2eReader := bytes.NewReader(fwdInfo.E2EPayload[:])
+					payload, err := applications.DecodeE2EPayload(e2eReader)
+					if err != nil {
+						log.Errorf("unable to decode e2e payload: %v", err)
+						failure := lnwire.FailUnknownPaymentHash{}
+						l.sendHTLCError(pd.RHash, failure, obfuscator)
+						needUpdate = true
+						continue
+					}
+
+					sphinxPayment, ok := payload.(*applications.SphinxPayment)
+					if ok {
+						rhash := fastsha256.Sum256(sphinxPayment.PaymentPreimage[:])
+						if !bytes.Equal(rhash[:], pd.RHash[:]) {
+							log.Errorf("unable to settle sphinx payment: %v", err)
+							failure := lnwire.FailUnknownPaymentHash{}
+							l.sendHTLCError(pd.RHash, failure, obfuscator)
+							needUpdate = true
+							continue
+						}
+						preimage = sphinxPayment.PaymentPreimage
+					} else {
+						log.Errorf("unable to query to locate: %v", err)
+						failure := lnwire.FailUnknownPaymentHash{}
+						l.sendHTLCError(pd.RHash, failure, obfuscator)
+						needUpdate = true
+						continue
+					}
+				} else {
+					// As we're the exit hop, we'll double check
+					// the hop-payload included in the HTLC to
+					// ensure that it was crafted correctly by the
+					// sender and matches the HTLC we were
+					// extended. Additionally, we'll ensure that
+					// our time-lock value has been computed
+					// correctly.
+					if fwdInfo.AmountToForward != invoice.Terms.Value {
+						log.Errorf("Onion payload of incoming "+
+							"htlc(%x) has incorrect value: "+
+							"expected %v, got %v", pd.RHash,
+							invoice.Terms.Value,
+							fwdInfo.AmountToForward)
+
+						failure := lnwire.FailIncorrectPaymentAmount{}
+						l.sendHTLCError(pd.RHash, failure, obfuscator)
+						needUpdate = true
+						continue
+					}
+
+					// If we're not currently in debug mode, and
+					// the extended htlc doesn't meet the value
+					// requested, then we'll fail the htlc.
+					// Otherwise, we settle this htlc within our
+					// local state update log, then send the update
+					// entry to the remote party.
+					if !l.cfg.DebugHTLC && pd.Amount < invoice.Terms.Value {
+						log.Errorf("rejecting htlc due to incorrect "+
+							"amount: expected %v, received %v",
+							invoice.Terms.Value, pd.Amount)
+						failure := lnwire.FailIncorrectPaymentAmount{}
+						l.sendHTLCError(pd.RHash, failure, obfuscator)
+						needUpdate = true
+						continue
+					}
+
+					preimage = invoice.Terms.PaymentPreimage
 				}
 
-				// As we're the exit hop, we'll double check
-				// the hop-payload included in the HTLC to
-				// ensure that it was crafted correctly by the
-				// sender and matches the HTLC we were
-				// extended. Additionally, we'll ensure that
-				// our time-lock value has been computed
-				// correctly.
-				if fwdInfo.AmountToForward != invoice.Terms.Value {
-					log.Errorf("Onion payload of incoming "+
-						"htlc(%x) has incorrect value: "+
-						"expected %v, got %v", pd.RHash,
-						invoice.Terms.Value,
-						fwdInfo.AmountToForward)
-
-					failure := lnwire.FailIncorrectPaymentAmount{}
-					l.sendHTLCError(pd.RHash, failure, obfuscator)
-					needUpdate = true
-					continue
-				}
 				if fwdInfo.OutgoingCTLV != l.cfg.FwrdingPolicy.TimeLockDelta {
 					log.Errorf("Onion payload of incoming "+
 						"htlc(%x) has incorrect time-lock: "+
@@ -980,36 +1027,21 @@ func (l *channelLink) processLockedInHtlcs(
 					continue
 				}
 
-				// If we're not currently in debug mode, and
-				// the extended htlc doesn't meet the value
-				// requested, then we'll fail the htlc.
-				// Otherwise, we settle this htlc within our
-				// local state update log, then send the update
-				// entry to the remote party.
-				if !l.cfg.DebugHTLC && pd.Amount < invoice.Terms.Value {
-					log.Errorf("rejecting htlc due to incorrect "+
-						"amount: expected %v, received %v",
-						invoice.Terms.Value, pd.Amount)
-					failure := lnwire.FailIncorrectPaymentAmount{}
-					l.sendHTLCError(pd.RHash, failure, obfuscator)
-					needUpdate = true
-					continue
-				}
-
-				preimage := invoice.Terms.PaymentPreimage
 				logIndex, err := l.channel.SettleHTLC(preimage)
 				if err != nil {
 					l.fail("unable to settle htlc: %v", err)
 					return nil
 				}
 
-				// Notify the invoiceRegistry of the invoices
-				// we just settled with this latest commitment
-				// update.
-				err = l.cfg.Registry.SettleInvoice(invoiceHash)
-				if err != nil {
-					l.fail("unable to settle invoice: %v", err)
-					return nil
+				if invoice != nil {
+					// Notify the invoiceRegistry of the invoices
+					// we just settled with this latest commitment
+					// update.
+					err = l.cfg.Registry.SettleInvoice(paymentHash)
+					if err != nil {
+						l.fail("unable to settle invoice: %v", err)
+						return nil
+					}
 				}
 
 				// HTLC was successfully settled locally send

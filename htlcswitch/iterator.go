@@ -67,6 +67,13 @@ type ForwardingInfo struct {
 	// in the outgoing HTLC.
 	OutgoingCTLV uint32
 
+	// E2EPayload is the blob of data, which sender wants to share with receiver.
+	// The exact interpretation of the meaning of this data, should be defined
+	// on the application layer.
+	// NOTE: Populated only on the exit hop. And only if sender set the e2e
+	// payload.
+	E2EPayload [sphinx.E2EPayloadSize]byte
+
 	// TODO(roasbeef): modify sphinx logic to not just discard the
 	// remaining bytes, instead should include the rest as excess
 }
@@ -136,6 +143,7 @@ func (r *sphinxHopIterator) ForwardingInstructions() ForwardingInfo {
 		NextHop:         nextHop,
 		AmountToForward: btcutil.Amount(fwdInst.ForwardAmount),
 		OutgoingCTLV:    fwdInst.OutgoingCltv,
+		E2EPayload:      r.processedPacket.E2EPayload,
 	}
 }
 

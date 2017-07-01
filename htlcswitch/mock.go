@@ -103,7 +103,9 @@ type mockHopIterator struct {
 }
 
 func newMockHopIterator(hops ...ForwardingInfo) HopIterator {
-	return &mockHopIterator{hops: hops}
+	return &mockHopIterator{
+		hops: hops,
+	}
 }
 
 func (r *mockHopIterator) ForwardingInstructions() ForwardingInfo {
@@ -143,6 +145,14 @@ func (f *ForwardingInfo) encode(w io.Writer) error {
 	}
 
 	if err := binary.Write(w, binary.BigEndian, f.OutgoingCTLV); err != nil {
+		return err
+	}
+
+	if _, err := w.Write([]byte{uint8(len(f.E2EPayload))}); err != nil {
+		return err
+	}
+
+	if _, err := w.Write(f.E2EPayload[:]); err != nil {
 		return err
 	}
 
@@ -238,6 +248,17 @@ func (f *ForwardingInfo) decode(r io.Reader) error {
 	if err := binary.Read(r, binary.BigEndian, &f.OutgoingCTLV); err != nil {
 		return err
 	}
+
+	var e2ePayloadLength [1]byte
+	if _, err := r.Read(e2ePayloadLength[:]); err != nil {
+		return err
+	}
+
+	e2ePayload := make([]byte, e2ePayloadLength[0])
+	if _, err := io.ReadFull(r, e2ePayload[:]); err != nil {
+		return err
+	}
+	copy(f.E2EPayload[:], e2ePayload)
 
 	return nil
 }

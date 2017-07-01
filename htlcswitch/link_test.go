@@ -714,7 +714,7 @@ func TestChannelLinkMultiHopUnknownPaymentHash(t *testing.T) {
 
 	htlcAmt, totalTimelock, hops := generateHops(amount,
 		n.firstBobChannelLink, n.carolChannelLink)
-	blob, err := generateRoute(hops...)
+	blob, err := generateBlob(nil, hops...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1010,5 +1010,92 @@ func TestChannelLinkSingleHopMessageOrdering(t *testing.T) {
 		n.bobServer.PubKey(), hops, amount, htlcAmt, totalTimelock)
 	if err != nil {
 		t.Fatalf("unable to make the payment: %v", err)
+	}
+}
+
+// TestSphinxPayment tests that if last channel link haven't been able to
+// find the invoice, it checks the e2e payload and tryes to decode the sphinx
+// payment and get the preimage from it.
+func TestSphinxPayment(t *testing.T) {
+	t.Parallel()
+
+	n := newThreeHopNetwork(t,
+		btcutil.SatoshiPerBitcoin*3,
+		btcutil.SatoshiPerBitcoin*5,
+	)
+	if err := n.start(); err != nil {
+		t.Fatal(err)
+	}
+	defer n.stop()
+
+	carolBandwidthBefore := n.carolChannelLink.Bandwidth()
+	firstBobBandwidthBefore := n.firstBobChannelLink.Bandwidth()
+	secondBobBandwidthBefore := n.secondBobChannelLink.Bandwidth()
+	aliceBandwidthBefore := n.aliceChannelLink.Bandwidth()
+
+	debug := false
+	if debug {
+		// Log messages that alice receives from bob.
+		n.aliceServer.record(createLogFunc("[alice]<-bob<-carol: ",
+			n.aliceChannelLink.ChanID()))
+
+		// Log messages that bob receives from alice.
+		n.bobServer.record(createLogFunc("alice->[bob]->carol: ",
+			n.firstBobChannelLink.ChanID()))
+
+		// Log messages that bob receives from carol.
+		n.bobServer.record(createLogFunc("alice<-[bob]<-carol: ",
+			n.secondBobChannelLink.ChanID()))
+
+		// Log messages that carol receives from bob.
+		n.carolServer.record(createLogFunc("alice->bob->[carol]",
+			n.carolChannelLink.ChanID()))
+	}
+
+	var amount btcutil.Amount = btcutil.SatoshiPerBitcoin
+	htlcAmt, totalTimelock, hops := generateHops(amount,
+		n.firstBobChannelLink, n.carolChannelLink)
+
+	// Wait for:
+	// * HTLC add request to be sent from Alice to Bob.
+	// * Alice<->Bob commitment states to be updated.
+	// * HTLC add request to be propagated to Carol.
+	// * Bob<->Carol commitment state to be updated.
+	// * settle request to be sent back from Carol to Bob.
+	// * Alice<->Bob commitment state to be updated.
+	// * settle request to be sent back from Bob to Alice.
+	// * Alice<->Bob commitment states to be updated.
+	// * user notification to be sent.
+	err := n.makeSphinxPayment(n.aliceServer, n.bobServer.PubKey(), hops,
+		htlcAmt, totalTimelock)
+	if err != nil {
+		t.Fatalf("unable to send payment: %v", err)
+	}
+
+	// Wait for Bob to receive the revocation.
+	time.Sleep(100 * time.Millisecond)
+
+	expectedAliceBandwidth := aliceBandwidthBefore - htlcAmt
+	if expectedAliceBandwidth != n.aliceChannelLink.Bandwidth() {
+		t.Fatalf("channel bandwidth incorrect: expected %v, got %v",
+			expectedAliceBandwidth, n.aliceChannelLink.Bandwidth())
+	}
+
+	expectedBobBandwidth1 := firstBobBandwidthBefore + htlcAmt
+	if expectedBobBandwidth1 != n.firstBobChannelLink.Bandwidth() {
+		t.Fatalf("channel bandwidth incorrect: expected %v, got %v",
+			expectedBobBandwidth1, n.firstBobChannelLink.Bandwidth())
+	}
+
+	expectedBobBandwidth2 := secondBobBandwidthBefore - amount
+	if expectedBobBandwidth2 != n.secondBobChannelLink.Bandwidth() {
+		t.Fatalf("channel bandwidth incorrect: expected %v, got %v",
+			expectedBobBandwidth2, n.secondBobChannelLink.Bandwidth())
+	}
+
+	expectedCarolBandwidth := carolBandwidthBefore + amount
+	if expectedCarolBandwidth != n.carolChannelLink.Bandwidth() {
+		t.Fatalf("channel bandwidth incorrect: expected %v, got %v",
+			expectedCarolBandwidth, n.carolChannelLink.Bandwidth())
 	}
 }

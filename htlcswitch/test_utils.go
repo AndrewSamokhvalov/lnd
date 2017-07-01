@@ -16,6 +16,7 @@ import (
 
 	"github.com/btcsuite/fastsha256"
 	"github.com/go-errors/errors"
+	"github.com/lightningnetwork/lnd/applications"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -281,23 +282,34 @@ func getChanID(msg lnwire.Message) lnwire.ChannelID {
 	return point
 }
 
-// generatePayment generates the htlc add request by given path blob and
-// invoice which should be added by destination peer.
-func generatePayment(invoiceAmt, htlcAmt btcutil.Amount, timelock uint32,
-	blob [lnwire.OnionPacketSize]byte) (*channeldb.Invoice, *lnwire.UpdateAddHTLC, error) {
+// generatePreimage...
+func generatePreimage() ([sha256.Size]byte, [sha256.Size]byte, error) {
+	var preimage, rhash [sha256.Size]byte
 
 	// Initialize random seed with unix time in order to generate random
 	// preimage every time.
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	var preimage [sha256.Size]byte
 	r, err := generateRandomBytes(sha256.Size)
+	if err != nil {
+		return preimage, rhash, err
+	}
+	copy(preimage[:], r)
+	rhash = fastsha256.Sum256(preimage[:])
+	return preimage, rhash, nil
+}
+
+// generatePayment generates the htlc add request by given path blob and
+// invoice which should be added by destination peer.
+func generatePayment(invoiceAmt,
+	htlcAmt btcutil.Amount, timelock uint32,
+	blob [lnwire.OnionPacketSize]byte) (*channeldb.Invoice,
+	*lnwire.UpdateAddHTLC, error) {
+
+	preimage, rhash, err := generatePreimage()
 	if err != nil {
 		return nil, nil, err
 	}
-	copy(preimage[:], r)
-
-	rhash := fastsha256.Sum256(preimage[:])
 
 	invoice := &channeldb.Invoice{
 		CreationDate: time.Now(),
@@ -317,13 +329,15 @@ func generatePayment(invoiceAmt, htlcAmt btcutil.Amount, timelock uint32,
 	return invoice, htlc, nil
 }
 
-// generateRoute generates the path blob by given array of peers.
-func generateRoute(hops ...ForwardingInfo) ([lnwire.OnionPacketSize]byte, error) {
+// generateBlob generates the path blob by given array of peers.
+func generateBlob(e2ePayload []byte, hops ...ForwardingInfo) (
+	[lnwire.OnionPacketSize]byte, error) {
 	var blob [lnwire.OnionPacketSize]byte
 	if len(hops) == 0 {
 		return blob, errors.New("empty path")
 	}
 
+	copy(hops[len(hops) - 1].E2EPayload[:], e2ePayload)
 	iterator := newMockHopIterator(hops...)
 
 	w := bytes.NewBuffer(blob[0:0])
@@ -436,7 +450,7 @@ func (n *threeHopNetwork) makePayment(sendingPeer, receivingPeer Peer,
 
 	// Generate route convert it to blob, and return next destination for
 	// htlc add request.
-	blob, err := generateRoute(hops...)
+	blob, err := generateBlob(nil, hops...)
 	if err != nil {
 		return nil, err
 	}
@@ -466,6 +480,59 @@ func (n *threeHopNetwork) makePayment(sendingPeer, receivingPeer Peer,
 		return invoice, err
 	case <-time.After(50 * time.Second):
 		return invoice, errors.New("htlc was not settled in time")
+	}
+}
+
+// makeSphinxPayment takes the destination node and amount as input, sends the
+// sphinx payment, payment without the invoice, and returns the error channel
+// to wait for error to be received and invoice in order to check its status
+// after the payment finished.
+func (n *threeHopNetwork) makeSphinxPayment(sendingPeer Peer,
+	firstHopPub [33]byte, hops []ForwardingInfo, htlcAmt btcutil.Amount,
+	timelock uint32) error {
+
+	sender := sendingPeer.(*mockServer)
+
+	preimage, rhash, err := generatePreimage()
+	if err != nil {
+		return err
+	}
+
+	// Generate sphinx payment, payment without creation of the invoice, and
+	// place it in payment e2e payload.
+	var b bytes.Buffer
+	payment := applications.NewSphinxPayment(preimage)
+	if err := applications.EncodeE2EPayload(payment, &b); err != nil {
+		return err
+	}
+
+	// Generate route convert it to blob, and return next destination for
+	// htlc add request.
+	blob, err := generateBlob(b.Bytes(), hops...)
+	if err != nil {
+		return err
+	}
+
+	htlc := &lnwire.UpdateAddHTLC{
+		PaymentHash: rhash,
+		Amount:      htlcAmt,
+		Expiry:      timelock,
+		OnionBlob:   blob,
+	}
+
+	// Send payment and expose err channel.
+	errChan := make(chan error)
+	go func() {
+		_, err := sender.htlcSwitch.SendHTLC(firstHopPub, htlc,
+			newMockDeobfuscator())
+		errChan <- err
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-time.After(50 * time.Second):
+		return errors.New("htlc was not settled in time")
 	}
 }
 
