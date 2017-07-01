@@ -854,8 +854,9 @@ func (r *ChannelRouter) FindRoutes(target *btcec.PublicKey, amt btcutil.Amount) 
 // the onion route specified by the passed layer 3 route. The blob returned
 // from this function can immediately be included within an HTLC add packet to
 // be sent to the first hop within the route.
-func generateOnionBlob(route *Route, paymentHash []byte) ([]byte,
-	htlcswitch.Deobfuscator, error) {
+func generateOnionBlob(route *Route, paymentHash []byte,
+	e2ePayload []byte) ([]byte, htlcswitch.Deobfuscator,
+	error) {
 	// First obtain all the public keys along the route which are contained
 	// in each hop.
 	nodes := make([]*btcec.PublicKey, len(route.Hops))
@@ -887,7 +888,7 @@ func generateOnionBlob(route *Route, paymentHash []byte) ([]byte,
 	// Next generate the onion routing packet which allows us to perform
 	// privacy preserving source routing across the network.
 	sphinxPacket, err := sphinx.NewOnionPacket(nodes, sessionKey,
-		hopPayloads, paymentHash)
+		hopPayloads, paymentHash, e2ePayload)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -933,9 +934,12 @@ type LightningPayment struct {
 
 	// PaymentHash is the r-hash value to use within the HTLC extended to
 	// the first hop.
-	PaymentHash [32]byte
+	PaymentHash [sha256.Size]byte
 
-	// TODO(roasbeef): add e2e message?
+	// E2EPayload is the blob of data, which sender wants to share with receiver.
+	// The exact interpretation of the meaning of this data, should be defined
+	// on the application layer.
+	E2EPayload []byte
 }
 
 // SendPayment attempts to send a payment as described within the passed
@@ -1003,7 +1007,7 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *Route
 		// with the htlcAdd message that we send directly to the
 		// switch.
 		onionBlob, failureObfuscator, err := generateOnionBlob(route,
-			payment.PaymentHash[:])
+			payment.PaymentHash[:], payment.E2EPayload)
 		if err != nil {
 			return preImage, nil, err
 		}
