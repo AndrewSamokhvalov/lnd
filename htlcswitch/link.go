@@ -148,7 +148,7 @@ type channelLink struct {
 	//
 	// TODO(andrew.shvv) remove after payment descriptor start store
 	// htlc onion blobs.
-	clearedOnionBlobs map[uint64][lnwire.OnionPacketSize]byte
+	clearedOnionBlobs map[uint64][]byte
 
 	// batchCounter is the number of updates which we received from remote
 	// side, but not include in commitment transaction yet and plus the
@@ -205,7 +205,7 @@ func NewChannelLink(cfg ChannelLinkConfig,
 	return &channelLink{
 		cfg:               cfg,
 		channel:           channel,
-		clearedOnionBlobs: make(map[uint64][lnwire.OnionPacketSize]byte),
+		clearedOnionBlobs: make(map[uint64][]byte),
 		upstream:          make(chan lnwire.Message),
 		downstream:        make(chan *htlcPacket),
 		linkControl:       make(chan interface{}),
@@ -438,10 +438,10 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
 				// The HTLC was unable to be added to the state
 				// machine, as a result, we'll signal the switch to
 				// cancel the pending payment.
-				onionReader := bytes.NewReader(htlc.OnionBlob[:])
+				onionReader := bytes.NewReader(htlc.OnionBlob)
 				obfuscator, err := l.cfg.GetOnionObfuscator(onionReader)
 				if err != nil {
-					l.sendMalformedHTLCError(err, htlc.OnionBlob[:], htlc.ID)
+					l.sendMalformedHTLCError(err, htlc.OnionBlob, htlc.ID)
 					return
 				}
 
@@ -887,12 +887,12 @@ func (l *channelLink) processLockedInHtlcs(
 
 			// Retrieve onion obfuscator from onion blob in order to produce
 			// initial obfuscation of the onion failure.
-			onionReader := bytes.NewReader(onionBlob[:])
+			onionReader := bytes.NewReader(onionBlob)
 			obfuscator, err := l.cfg.GetOnionObfuscator(onionReader)
 			if err != nil {
 				// If we unable to process the onion blob than we should send
 				// the malformed htlc error to payment sender.
-				l.sendMalformedHTLCError(err, onionBlob[:], pd.Index)
+				l.sendMalformedHTLCError(err, onionBlob, pd.Index)
 				continue
 			}
 
@@ -907,18 +907,18 @@ func (l *channelLink) processLockedInHtlcs(
 			// attacks. In the case of a replay, an attacker is
 			// *forced* to use the same payment hash twice, thereby
 			// losing their money entirely.
-			onionReader = bytes.NewReader(onionBlob[:])
+			onionReader = bytes.NewReader(onionBlob)
 			chanIterator, err := l.cfg.GetHopIterator(onionReader, pd.RHash[:])
 			if err != nil {
 				log.Errorf("unable to get the next hop: %v", err)
 				var failure lnwire.Failure
 				switch err {
 				case sphinx.ErrInvalidOnionVersion:
-					failure = lnwire.NewInvalidOnionVersion(onionBlob[:])
+					failure = lnwire.NewInvalidOnionVersion(onionBlob)
 				case sphinx.ErrInvalidOnionHMAC:
-					failure = lnwire.NewInvalidOnionHmac(onionBlob[:])
+					failure = lnwire.NewInvalidOnionHmac(onionBlob)
 				case sphinx.ErrInvalidOnionKey:
-					failure = lnwire.NewInvalidOnionKey(onionBlob[:])
+					failure = lnwire.NewInvalidOnionKey(onionBlob)
 				default:
 					log.Errorf("unable create failure for non-specification " +
 						"onion error")
@@ -1145,8 +1145,8 @@ func (l *channelLink) processLockedInHtlcs(
 				// Finally, we'll encode the onion packet for
 				// the _next_ hop using the hop iterator
 				// decoded for the current hop.
-				buf := bytes.NewBuffer(addMsg.OnionBlob[0:0])
-				err := chanIterator.EncodeNextHop(buf)
+				var buf bytes.Buffer
+				err := chanIterator.EncodeNextHop(&buf)
 				if err != nil {
 					log.Errorf("unable to encode the "+
 						"remaining route %v", err)
@@ -1156,6 +1156,7 @@ func (l *channelLink) processLockedInHtlcs(
 					needUpdate = true
 					continue
 				}
+				addMsg.OnionBlob = buf.Bytes()
 
 				updatePacket := newAddPacket(l.ShortChanID(),
 					fwdInfo.NextHop, addMsg, obfuscator)
@@ -1213,8 +1214,8 @@ func (l *channelLink) sendMalformedHTLCError(err error, onionBlob []byte,
 	case sphinx.ErrInvalidOnionKey:
 		code = lnwire.CodeInvalidOnionKey
 	default:
-		log.Errorf("unable create failure for non-specification " +
-			"onion error")
+		log.Errorf("unable to send malformed error: unable to create failure"+
+			" for non-specification onion error: %v", err)
 		return
 	}
 

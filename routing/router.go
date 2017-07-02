@@ -1019,8 +1019,8 @@ func (r *ChannelRouter) SendPayment(payment *LightningPayment) ([32]byte, *Route
 			Amount:      route.TotalAmount,
 			Expiry:      route.TotalTimeLock,
 			PaymentHash: payment.PaymentHash,
+			OnionBlob:   onionBlob,
 		}
-		copy(htlcAdd.OnionBlob[:], onionBlob)
 
 		// Attempt to send this payment through the network to complete
 		// the payment. If this attempt fails, then we'll continue on

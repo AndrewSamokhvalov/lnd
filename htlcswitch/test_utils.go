@@ -301,10 +301,8 @@ func generatePreimage() ([sha256.Size]byte, [sha256.Size]byte, error) {
 
 // generatePayment generates the htlc add request by given path blob and
 // invoice which should be added by destination peer.
-func generatePayment(invoiceAmt,
-	htlcAmt btcutil.Amount, timelock uint32,
-	blob [lnwire.OnionPacketSize]byte) (*channeldb.Invoice,
-	*lnwire.UpdateAddHTLC, error) {
+func generatePayment(invoiceAmt, htlcAmt btcutil.Amount, timelock uint32,
+	blob []byte) (*channeldb.Invoice, *lnwire.UpdateAddHTLC, error) {
 
 	preimage, rhash, err := generatePreimage()
 	if err != nil {
@@ -330,22 +328,20 @@ func generatePayment(invoiceAmt,
 }
 
 // generateBlob generates the path blob by given array of peers.
-func generateBlob(e2ePayload []byte, hops ...ForwardingInfo) (
-	[lnwire.OnionPacketSize]byte, error) {
-	var blob [lnwire.OnionPacketSize]byte
+func generateBlob(e2ePayload []byte, hops ...ForwardingInfo) ([]byte, error) {
 	if len(hops) == 0 {
-		return blob, errors.New("empty path")
+		return nil, errors.New("empty path")
 	}
 
 	copy(hops[len(hops) - 1].E2EPayload[:], e2ePayload)
 	iterator := newMockHopIterator(hops...)
 
-	w := bytes.NewBuffer(blob[0:0])
-	if err := iterator.EncodeNextHop(w); err != nil {
-		return blob, err
+	var b bytes.Buffer
+	if err := iterator.EncodeNextHop(&b); err != nil {
+		return nil, err
 	}
 
-	return blob, nil
+	return b.Bytes(), nil
 
 }
 
