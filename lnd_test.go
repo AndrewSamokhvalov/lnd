@@ -2513,38 +2513,12 @@ func testAsyncPayments(net *networkHarness, t *harnessTest) {
 	}
 
 	// Calculate the number of invoices.
-	numInvoices := int(info.LocalBalance / paymentAmt)
-	bobAmt := int64(numInvoices * paymentAmt)
+	numPayments := int(info.LocalBalance / paymentAmt)
+	bobAmt := int64(numPayments * paymentAmt)
 	aliceAmt := info.LocalBalance - bobAmt
 
 	// Send one more payment in order to cause insufficient capacity error.
-	numInvoices++
-
-	// Initialize seed random in order to generate invoices.
-	rand.Seed(time.Now().UnixNano())
-
-	// With the channel open, we'll create a invoices for Bob that
-	// Alice will pay to in order to advance the state of the channel.
-	bobPaymentHashes := make([][]byte, numInvoices)
-	for i := 0; i < numInvoices; i++ {
-		preimage := make([]byte, 32)
-		_, err := rand.Read(preimage)
-		if err != nil {
-			t.Fatalf("unable to generate preimage: %v", err)
-		}
-
-		invoice := &lnrpc.Invoice{
-			Memo:      "testing",
-			RPreimage: preimage,
-			Value:     paymentAmt,
-		}
-		resp, err := net.Bob.AddInvoice(ctxb, invoice)
-		if err != nil {
-			t.Fatalf("unable to add invoice: %v", err)
-		}
-
-		bobPaymentHashes[i] = resp.RHash
-	}
+	numPayments++
 
 	// Wait for Alice to receive the channel edge from the funding manager.
 	ctxt, _ = context.WithTimeout(ctxb, timeout)
@@ -2565,9 +2539,8 @@ func testAsyncPayments(net *networkHarness, t *harnessTest) {
 	// Send payments from Alice to Bob using of Bob's payment hashes
 	// generated above.
 	now := time.Now()
-	for i := 0; i < numInvoices; i++ {
+	for i := 0; i < numPayments; i++ {
 		sendReq := &lnrpc.SendRequest{
-			PaymentHash: bobPaymentHashes[i],
 			Dest:        net.Bob.PubKey[:],
 			Amt:         paymentAmt,
 		}
@@ -2581,7 +2554,7 @@ func testAsyncPayments(net *networkHarness, t *harnessTest) {
 	// We should receive one insufficient capacity error, because we are
 	// sending on one invoice bigger.
 	errorReceived := false
-	for i := 0; i < numInvoices; i++ {
+	for i := 0; i < numPayments; i++ {
 		if resp, err := alicePayStream.Recv(); err != nil {
 			t.Fatalf("payment stream have been closed: %v", err)
 		} else if resp.PaymentError != "" {
@@ -2646,7 +2619,7 @@ func testAsyncPayments(net *networkHarness, t *harnessTest) {
 	}
 
 	t.Log("\tBenchmark info: Elapsed time: ", timeTaken)
-	t.Log("\tBenchmark info: TPS: ", float64(numInvoices)/float64(timeTaken.Seconds()))
+	t.Log("\tBenchmark info: TPS: ", float64(numPayments)/float64(timeTaken.Seconds()))
 
 	// Finally, immediately close the channel. This function will also
 	// block until the channel is closed and will additionally assert the
