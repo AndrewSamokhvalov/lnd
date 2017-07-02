@@ -6,11 +6,23 @@ import (
 	"github.com/roasbeef/btcutil"
 )
 
-// OnionPacketSize is the size of the serialized Sphinx onion packet included
+// MaxOnionPacketSize is the size of the serialized Sphinx onion packet included
 // in each UpdateAddHTLC message. The breakdown of the onion packet is as
 // follows: 1-byte version, 33-byte ephemeral public key (for ECDH), 1300-bytes
 // of per-hop data, and a 32-byte HMAC over the entire packet.
-const OnionPacketSize = 1366
+const MaxOnionPacketSize = 1466
+
+// OnionBlob is the raw serialized mix header used to route an HTLC in
+// a privacy-preserving manner. The mix header is defined currently to
+// be parsed as a 4-tuple: (groupElement, routingInfo, headerMAC,
+// body).  First the receiving node should use the groupElement, and
+// its current onion key to derive a shared secret with the source.
+// Once the shared secret has been derived, the headerMAC should be
+// checked FIRST. Note that the MAC only covers the routingInfo field.
+// If the MAC matches, and the shared secret is fresh, then the node
+// should strip off a layer of encryption, exposing the next hop to be
+// used in the subsequent UpdateAddHTLC message.
+type OnionBlob []byte
 
 // UpdateAddHTLC is the message sent by Alice to Bob when she wishes to add an
 // HTLC to his remote commitment transaction. In addition to information
@@ -43,17 +55,8 @@ type UpdateAddHTLC struct {
 	// upstream peer in order to fully settle the HTLC.
 	PaymentHash [32]byte
 
-	// OnionBlob is the raw serialized mix header used to route an HTLC in
-	// a privacy-preserving manner. The mix header is defined currently to
-	// be parsed as a 4-tuple: (groupElement, routingInfo, headerMAC,
-	// body).  First the receiving node should use the groupElement, and
-	// its current onion key to derive a shared secret with the source.
-	// Once the shared secret has been derived, the headerMAC should be
-	// checked FIRST. Note that the MAC only covers the routingInfo field.
-	// If the MAC matches, and the shared secret is fresh, then the node
-	// should strip off a layer of encryption, exposing the next hop to be
-	// used in the subsequent UpdateAddHTLC message.
-	OnionBlob [OnionPacketSize]byte
+	// OnionBlob encoded blob of Sphinx data.
+	OnionBlob OnionBlob
 }
 
 // NewUpdateAddHTLC returns a new empty UpdateAddHTLC message.
@@ -76,7 +79,7 @@ func (c *UpdateAddHTLC) Decode(r io.Reader, pver uint32) error {
 		&c.Expiry,
 		&c.Amount,
 		c.PaymentHash[:],
-		c.OnionBlob[:],
+		&c.OnionBlob,
 	)
 }
 
@@ -91,7 +94,7 @@ func (c *UpdateAddHTLC) Encode(w io.Writer, pver uint32) error {
 		c.Expiry,
 		c.Amount,
 		c.PaymentHash[:],
-		c.OnionBlob[:],
+		c.OnionBlob,
 	)
 }
 
@@ -108,6 +111,6 @@ func (c *UpdateAddHTLC) MsgType() MessageType {
 //
 // This is part of the lnwire.Message interface.
 func (c *UpdateAddHTLC) MaxPayloadLength(uint32) uint32 {
-	// 1450
-	return 32 + 8 + 4 + 8 + 32 + 1366
+	// 1552
+	return 32 + 8 + 4 + 8 + 32 + 2 + MaxOnionPacketSize + 100
 }
