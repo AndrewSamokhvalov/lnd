@@ -87,7 +87,6 @@ type config struct {
 
 	PeerPort           int  `long:"peerport" description:"The port to listen on for incoming p2p connections"`
 	RPCPort            int  `long:"rpcport" description:"The port for the rpc server"`
-	DebugHTLC          bool `long:"debughtlc" description:"Activate the debug htlc mode. With the debug HTLC mode, all payments sent use a pre-determined R-Hash. Additionally, all HTLCs sent to a node with the debug HTLC R-Hash are immediately settled in the next available state transition."`
 	MaxPendingChannels int  `long:"maxpendingchannels" description:"The maximum number of incoming pending channels permitted per peer."`
 
 	Litecoin *chainConfig `group:"Litecoin" namespace:"litecoin"`

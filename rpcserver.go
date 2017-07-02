@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -16,8 +15,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"math/rand"
+
+	"bytes"
+
 	"github.com/boltdb/bolt"
+	"github.com/btcsuite/fastsha256"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/lightningnetwork/lnd/applications"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -1170,25 +1175,6 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 					return
 				}
 
-				// If the payment request field isn't blank,
-				// then the details of the invoice are encoded
-				// entirely within the encode payReq. So we'll
-				// attempt to decode it, populating the
-				// nextPayment accordingly.
-				if nextPayment.PaymentRequest != "" {
-					payReq, err := zpay32.Decode(nextPayment.PaymentRequest)
-					if err != nil {
-						errChan <- err
-						return
-					}
-
-					// TODO(roasbeef): eliminate necessary
-					// encode/decode
-					nextPayment.Dest = payReq.Destination.SerializeCompressed()
-					nextPayment.Amt = int64(payReq.Amount)
-					nextPayment.PaymentHash = payReq.PaymentHash[:]
-				}
-
 				payChan <- nextPayment
 			}
 		}
@@ -1198,25 +1184,11 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 		select {
 		case err := <-errChan:
 			return err
-		case nextPayment := <-payChan:
-			// Parse the details of the payment which include the
-			// pubkey of the destination and the payment amount.
-			dest := nextPayment.Dest
-			amt := btcutil.Amount(nextPayment.Amt)
-			destNode, err := btcec.ParsePubKey(dest, btcec.S256())
+		case sendRequest := <-payChan:
+			payment, err := constructPayment(r.server.identityPriv.PubKey(),
+				sendRequest)
 			if err != nil {
 				return err
-
-			}
-
-			// If we're in debug HTLC mode, then all outgoing HTLCs
-			// will pay to the same debug rHash. Otherwise, we pay
-			// to the rHash specified within the RPC request.
-			var rHash [32]byte
-			if cfg.DebugHTLC && len(nextPayment.PaymentHash) == 0 {
-				rHash = debugHash
-			} else {
-				copy(rHash[:], nextPayment.PaymentHash)
 			}
 
 			// We launch a new goroutine to execute the current
@@ -1231,16 +1203,6 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 					htlcSema <- struct{}{}
 				}()
 
-				// Construct a payment request to send to the
-				// channel router. If the payment is
-				// successful, the route chosen will be
-				// returned. Otherwise, we'll get a non-nil
-				// error.
-				payment := &routing.LightningPayment{
-					Target:      destNode,
-					Amount:      amt,
-					PaymentHash: rHash,
-				}
 				preImage, route, err := r.server.chanRouter.SendPayment(payment)
 				if err != nil {
 					// If we receive payment error than,
@@ -1260,7 +1222,8 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 
 				// Save the completed payment to the database
 				// for record keeping purposes.
-				if err := r.savePayment(route, amt, rHash[:]); err != nil {
+				err = r.savePayment(route, payment.Amount, payment.PaymentHash[:])
+				if err != nil {
 					errChan <- err
 					return
 				}
@@ -1284,68 +1247,22 @@ func (r *rpcServer) SendPayment(paymentStream lnrpc.Lightning_SendPaymentServer)
 // hash (if any) to be encoded as hex strings.
 func (r *rpcServer) SendPaymentSync(ctx context.Context,
 	nextPayment *lnrpc.SendRequest) (*lnrpc.SendResponse, error) {
-
-	var (
-		destPub *btcec.PublicKey
-		amt     btcutil.Amount
-		rHash   [32]byte
-	)
-
-	// If the proto request has an encoded payment request, then we we'll
-	// use that solely to dipatch the payment.
-	if nextPayment.PaymentRequest != "" {
-		payReq, err := zpay32.Decode(nextPayment.PaymentRequest)
-		if err != nil {
-			return nil, err
-		}
-		destPub = payReq.Destination
-		amt = payReq.Amount
-		rHash = payReq.PaymentHash
-
-		// Otherwise, the payment conditions have been manually
-		// specified in the proto.
-	} else {
-		// If we're in debug HTLC mode, then all outgoing HTLCs will
-		// pay to the same debug rHash. Otherwise, we pay to the rHash
-		// specified within the RPC request.
-		if cfg.DebugHTLC && nextPayment.PaymentHashString == "" {
-			rHash = debugHash
-		} else {
-			paymentHash, err := hex.DecodeString(nextPayment.PaymentHashString)
-			if err != nil {
-				return nil, err
-			}
-
-			copy(rHash[:], paymentHash)
-		}
-
-		pubBytes, err := hex.DecodeString(nextPayment.DestString)
-		if err != nil {
-			return nil, err
-		}
-		destPub, err = btcec.ParsePubKey(pubBytes, btcec.S256())
-		if err != nil {
-			return nil, err
-		}
-
-		amt = btcutil.Amount(nextPayment.Amt)
+	payment, err := constructPayment(r.server.identityPriv.PubKey(), nextPayment)
+	if err != nil {
+		return nil, err
 	}
 
 	// Finally, send a payment request to the channel router. If the
 	// payment succeeds, then the returned route will be that was used
 	// successfully within the payment.
-	preImage, route, err := r.server.chanRouter.SendPayment(&routing.LightningPayment{
-		Target:      destPub,
-		Amount:      amt,
-		PaymentHash: rHash,
-	})
+	preImage, route, err := r.server.chanRouter.SendPayment(payment)
 	if err != nil {
 		return nil, err
 	}
 
 	// With the payment completed successfully, we now ave the details of
 	// the completed payment to the database for historical record keeping.
-	if err := r.savePayment(route, amt, rHash[:]); err != nil {
+	if err := r.savePayment(route, payment.Amount, payment.PaymentHash[:]); err != nil {
 		return nil, err
 	}
 
@@ -2219,5 +2136,103 @@ func (r *rpcServer) DecodePayReq(ctx context.Context,
 		Destination: hex.EncodeToString(dest),
 		PaymentHash: hex.EncodeToString(payReq.PaymentHash[:]),
 		NumSatoshis: int64(payReq.Amount),
+	}, nil
+}
+
+// generateRandomBytes returns securely generated random bytes.
+// It will return an error if the system's secure random
+// number generator fails to function correctly, in which
+// case the caller should not continue.
+func generateRandomBytes(n int) ([]byte, error) {
+	b := make([]byte, n)
+
+	_, err := rand.Read(b[:])
+	// Note that Err == nil only if we read len(b) bytes.
+	if err != nil {
+		return nil, err
+	}
+
+	return b, nil
+}
+
+// generatePreimage...
+func generatePreimage() ([sha256.Size]byte, [sha256.Size]byte, error) {
+	var preimage, rhash [sha256.Size]byte
+
+	// Initialize random seed with unix time in order to generate random
+	// preimage every time.
+	rand.Seed(time.Now().UTC().UnixNano())
+
+	r, err := generateRandomBytes(sha256.Size)
+	if err != nil {
+		return preimage, rhash, err
+	}
+	copy(preimage[:], r)
+	rhash = fastsha256.Sum256(preimage[:])
+	return preimage, rhash, nil
+}
+
+// constructPayment...
+func constructPayment(nodePubkey *btcec.PublicKey,
+	sendRequest *lnrpc.SendRequest) (*routing.LightningPayment, error) {
+	var (
+		destination *btcec.PublicKey
+		rhash       [sha256.Size]byte
+		amount      btcutil.Amount
+		e2ePayload  []byte
+		err         error
+	)
+	// If the payment request field isn't blank,
+	// then the details of the invoice are encoded
+	// entirely within the encode payReq. So we'll
+	// attempt to decode it, populating the
+	// sendRequest accordingly.
+	if sendRequest.PaymentRequest != "" {
+		payReq, err := zpay32.Decode(sendRequest.PaymentRequest)
+		if err != nil {
+			return nil, err
+		}
+
+		destination = payReq.Destination
+		amount = payReq.Amount
+		rhash = payReq.PaymentHash
+	} else {
+		// Parse the details of the payment which include the
+		// pubkey of the destination and the payment amount.
+		destination, err = btcec.ParsePubKey(sendRequest.Dest, btcec.S256())
+		if err != nil {
+			return nil, err
+		}
+
+		preimage, rHash, err := generatePreimage()
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO(andrew.shvv) add flag to not include pubkey in payment
+		// TODO(andrew.shvv) add flag to specify the description
+		sphinxPayment := applications.NewSphinxPayment(preimage)
+		sphinxPayment.SetPubKey(nodePubkey)
+		sphinxPayment.SetDescription([]byte("covfefe"))
+
+		var payloadBuffer bytes.Buffer
+		err = applications.EncodeE2EPayload(sphinxPayment, &payloadBuffer)
+		if err != nil {
+			return nil, err
+		}
+
+		rhash = rHash
+		amount = btcutil.Amount(sendRequest.Amt)
+		e2ePayload = payloadBuffer.Bytes()
+	}
+
+	// Construct a payment request to send to the channel router. If the payment
+	// is successful, the route chosen will be returned. Otherwise, we'll get a
+	// non-nil error.
+	return &routing.LightningPayment{
+		Target:      destination,
+		Amount:      amount,
+		PaymentHash: rhash,
+		E2EPayload:  e2ePayload,
 	}, nil
 }

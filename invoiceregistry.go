@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"sync"
 	"time"
@@ -10,17 +9,6 @@ import (
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/roasbeef/btcd/chaincfg/chainhash"
 	"github.com/roasbeef/btcutil"
-)
-
-var (
-	// debugPre is the default debug preimage which is inserted into the
-	// invoice registry if the --debughtlc flag is activated on start up.
-	// All nodes initialized with the flag active will immediately settle
-	// any incoming HTLC whose rHash corresponds with the debug
-	// preimage.
-	debugPre, _ = chainhash.NewHash(bytes.Repeat([]byte{1}, 32))
-
-	debugHash = chainhash.Hash(sha256.Sum256(debugPre[:]))
 )
 
 // invoiceRegistry is a central registry of all the outstanding invoices

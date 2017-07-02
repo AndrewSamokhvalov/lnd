@@ -114,11 +114,6 @@ type ChannelLinkConfig struct {
 	// been closed. Once a channel has been closed the other subsystem no
 	// longer needs to watch for breach closes.
 	SettledContracts chan *wire.OutPoint
-
-	// DebugHTLC should be turned on if you want all HTLCs sent to a node
-	// with the debug htlc R-Hash are immediately settled in the next
-	// available state transition.
-	DebugHTLC bool
 }
 
 // channelLink is the service which drives a channel's commitment update
@@ -1001,7 +996,7 @@ func (l *channelLink) processLockedInHtlcs(
 					// Otherwise, we settle this htlc within our
 					// local state update log, then send the update
 					// entry to the remote party.
-					if !l.cfg.DebugHTLC && pd.Amount < invoice.Terms.Value {
+					if pd.Amount < invoice.Terms.Value {
 						log.Errorf("rejecting htlc due to incorrect "+
 							"amount: expected %v, received %v",
 							invoice.Terms.Value, pd.Amount)

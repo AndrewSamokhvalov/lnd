@@ -195,14 +195,8 @@ message TransactionDetails {
 
 message SendRequest {
     bytes dest = 1;
-    string dest_string = 2;
-
-    int64 amt = 3;
-
-    bytes payment_hash = 4;
-    string payment_hash_string = 5;
-
-    string payment_request = 6;
+    int64 amt = 2;
+    string payment_request = 3;
 }
 message SendResponse {
     string payment_error = 1 [json_name = "payment_error"];

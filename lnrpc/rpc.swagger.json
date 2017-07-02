@@ -1688,19 +1688,9 @@
           "type": "string",
           "format": "byte"
         },
-        "dest_string": {
-          "type": "string"
-        },
         "amt": {
           "type": "string",
           "format": "int64"
-        },
-        "payment_hash": {
-          "type": "string",
-          "format": "byte"
-        },
-        "payment_hash_string": {
-          "type": "string"
         },
         "payment_request": {
           "type": "string"

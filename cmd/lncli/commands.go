@@ -748,10 +748,9 @@ func listChannels(ctx *cli.Context) error {
 }
 
 var sendPaymentCommand = cli.Command{
-	Name:  "sendpayment",
-	Usage: "send a payment over lightning",
-	ArgsUsage: "(destination amount payment_hash " +
-		"| --pay_req=[payment request])",
+	Name:      "sendpayment",
+	Usage:     "send a payment over lightning",
+	ArgsUsage: "( --dest=[dest] --amt=[amount] | --pay_req=[payment request] )",
 	Flags: []cli.Flag{
 		cli.StringFlag{
 			Name: "dest, d",
@@ -761,14 +760,6 @@ var sendPaymentCommand = cli.Command{
 		cli.Int64Flag{
 			Name:  "amt, a",
 			Usage: "number of satoshis to send",
-		},
-		cli.StringFlag{
-			Name:  "payment_hash, r",
-			Usage: "the hash to use within the payment's HTLC",
-		},
-		cli.BoolFlag{
-			Name:  "debug_send",
-			Usage: "use the debug rHash when sending the HTLC",
 		},
 		cli.StringFlag{
 			Name:  "pay_req",
@@ -782,7 +773,7 @@ func sendPayment(ctx *cli.Context) error {
 	client, cleanUp := getClient(ctx)
 	defer cleanUp()
 
-	// Show command help if no arguments provieded
+	// Show command help if no arguments provided
 	if ctx.NArg() == 0 && ctx.NumFlags() == 0 {
 		cli.ShowCommandHelp(ctx, "sendpayment")
 		return nil
@@ -809,54 +800,30 @@ func sendPayment(ctx *cli.Context) error {
 			destNode, err = hex.DecodeString(args.First())
 			args = args.Tail()
 		default:
-			return fmt.Errorf("destination txid argument missing")
-		}
-		if err != nil {
-			return err
+			return fmt.Errorf("unable to proceed: 'dest' argument missing")
 		}
 
+		if err != nil {
+			return fmt.Errorf("unable to decode 'dest' field: %v", err)
+		}
 		if len(destNode) != 33 {
-			return fmt.Errorf("dest node pubkey must be exactly 33 bytes, is "+
-				"instead: %v", len(destNode))
+			return fmt.Errorf("unabel to proceed: 'dest' field must be "+
+				"exactly 33 bytes, is instead: %v", len(destNode))
 		}
 
 		if ctx.IsSet("amt") {
 			amount = ctx.Int64("amt")
 		} else if args.Present() {
 			amount, err = strconv.ParseInt(args.First(), 10, 64)
-			args = args.Tail()
 			if err != nil {
 				return fmt.Errorf("unable to decode payment amount: %v", err)
 			}
+			args = args.Tail()
 		}
 
 		req = &lnrpc.SendRequest{
 			Dest: destNode,
 			Amt:  amount,
-		}
-
-		if ctx.Bool("debug_send") && (ctx.IsSet("payment_hash") || args.Present()) {
-			return fmt.Errorf("do not provide a payment hash with debug send")
-		} else if !ctx.Bool("debug_send") {
-			var rHash []byte
-
-			switch {
-			case ctx.IsSet("payment_hash"):
-				rHash, err = hex.DecodeString(ctx.String("payment_hash"))
-			case args.Present():
-				rHash, err = hex.DecodeString(args.First())
-			default:
-				return fmt.Errorf("payment hash argument missing")
-			}
-
-			if err != nil {
-				return err
-			}
-			if len(rHash) != 32 {
-				return fmt.Errorf("payment hash must be exactly 32 "+
-					"bytes, is instead %v", len(rHash))
-			}
-			req.PaymentHash = rHash
 		}
 	}
 
