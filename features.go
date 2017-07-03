@@ -29,4 +29,8 @@ var localFeatures = lnwire.NewFeatureVector([]lnwire.Feature{
 		Name: "sphinx-payload",
 		Flag: lnwire.RequiredFlag,
 	},
+	{
+		Name: "sphinx-payment",
+		Flag: lnwire.RequiredFlag,
+	},
 })
