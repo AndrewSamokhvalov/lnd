@@ -45,7 +45,7 @@ type pendingPayment struct {
 // plexPacket encapsulates switch packet and adds error channel to receive
 // error from request handler.
 type plexPacket struct {
-	pkt *htlcPacket
+	pkt Packet
 	err chan error
 }
 
@@ -224,7 +224,7 @@ func (s *Switch) SendHTLC(nextNode [33]byte, htlc *lnwire.UpdateAddHTLC,
 // forward is used in order to find next channel link and apply htlc
 // update. Also this function is used by channel links itself in order to
 // forward the update after it has been included in the channel.
-func (s *Switch) forward(packet *htlcPacket) error {
+func (s *Switch) forward(packet Packet) error {
 	command := &plexPacket{
 		pkt: packet,
 		err: make(chan error, 1),
@@ -257,12 +257,13 @@ func (s *Switch) forward(packet *htlcPacket) error {
 //     o <-settle-- o <--settle-- o
 //   Alice         Bob         Carol
 //
-func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket) error {
-	switch htlc := packet.htlc.(type) {
+func (s *Switch) handleLocalDispatch(payment *pendingPayment,
+	packet Packet) error {
+	switch packet := packet.(type) {
 
 	// User have created the htlc update therefore we should find the
 	// appropriate channel link and send the payment over this link.
-	case *lnwire.UpdateAddHTLC:
+	case *initPacket:
 		// Try to find links by node destination.
 		links, err := s.getLinks(packet.destNode)
 		if err != nil {
@@ -275,7 +276,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		// bandwidth.
 		var destination ChannelLink
 		for _, link := range links {
-			if link.Bandwidth() >= htlc.Amount {
+			if link.Bandwidth() >= packet.htlc.Amount {
 				destination = link
 				break
 			}
@@ -286,7 +287,7 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 		// as the payment cannot succeed.
 		if destination == nil {
 			log.Errorf("unable to find appropriate channel link "+
-				"insufficient capacity, need %v", htlc.Amount)
+				"insufficient capacity, need %v", packet.htlc.Amount)
 			return errors.New(lnwire.CodeInsufficientCapacity)
 		}
 
@@ -297,23 +298,23 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 
 	// We've just received a settle update which means we can finalize
 	// the user payment and return successful response.
-	case *lnwire.UpdateFufillHTLC:
+	case *settlePacket:
 		// Notify the user that his payment was
 		// successfully proceed.
 		payment.err <- nil
-		payment.preimage <- htlc.PaymentPreimage
+		payment.preimage <- packet.htlc.PaymentPreimage
 		s.removePendingPayment(payment.amount, payment.paymentHash)
 
 	// We've just received a fail update which means we can finalize
 	// the user payment and return fail response.
-	case *lnwire.UpdateFailHTLC:
+	case *failPacket:
 		// Retrieving the fail code from byte representation of error.
 		var userErr error
 
-		failure, err := payment.deobfuscator.Deobfuscate(htlc.Reason)
+		failure, err := payment.deobfuscator.Deobfuscate(packet.htlc.Reason)
 		if err != nil {
 			userErr = errors.Errorf("unable to de-obfuscate "+
-				"onion failure, htlc with id(%v): %v", htlc.ID, err)
+				"onion failure, htlc with id(%v): %v", packet.htlc.ID, err)
 			log.Error(userErr)
 		} else {
 			// Process payment failure by updating the lightning network
@@ -359,13 +360,13 @@ func (s *Switch) handleLocalDispatch(payment *pendingPayment, packet *htlcPacket
 // handlePacketForward is used in cases when we need forward the htlc update
 // from one channel link to another and be able to propagate the settle/fail
 // updates back. This behaviour is achieved by creation of payment circuits.
-func (s *Switch) handlePacketForward(packet *htlcPacket) error {
-	switch htlc := packet.htlc.(type) {
+func (s *Switch) handlePacketForward(packet Packet) error {
+	switch packet := packet.(type) {
 
 	// Channel link forwarded us a new htlc, therefore we initiate the
 	// payment circuit within our internal state so we can properly forward
 	// the ultimate settle message back latter.
-	case *lnwire.UpdateAddHTLC:
+	case *addPacket:
 		source, err := s.getLinkByShortID(packet.src)
 		if err != nil {
 			err := errors.Errorf("unable to find channel link "+
@@ -393,7 +394,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				&lnwire.UpdateFailHTLC{
 					Reason: reason,
 				},
-				htlc.PaymentHash, 0, true,
+				packet.htlc.PaymentHash, 0, true,
 			))
 			err = errors.Errorf("unable to find link with "+
 				"destination %v", packet.dest)
@@ -404,7 +405,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		// If the channel link we're attempting to forward the update
 		// over has insufficient capacity, then we'll cancel the htlc
 		// as the payment cannot succeed.
-		if destination.Bandwidth() < htlc.Amount {
+		if destination.Bandwidth() < packet.htlc.Amount {
 			// If packet was forwarded from another
 			// channel link than we should notify this
 			// link that some error occurred.
@@ -422,13 +423,13 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				&lnwire.UpdateFailHTLC{
 					Reason: reason,
 				},
-				htlc.PaymentHash,
+				packet.htlc.PaymentHash,
 				0, true,
 			))
 
 			err = errors.Errorf("unable to find appropriate "+
 				"channel link insufficient capacity, need "+
-				"%v", htlc.Amount)
+				"%v", packet.htlc.Amount)
 			log.Error(err)
 			return err
 		}
@@ -439,7 +440,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		if err := s.circuits.add(newPaymentCircuit(
 			source.ShortChanID(),
 			destination.ShortChanID(),
-			htlc.PaymentHash,
+			packet.htlc.PaymentHash,
 			packet.obfuscator,
 		)); err != nil {
 			failure := lnwire.FailPermanentChannelFailure{}
@@ -456,7 +457,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 				&lnwire.UpdateFailHTLC{
 					Reason: reason,
 				},
-				htlc.PaymentHash, 0, true,
+				packet.htlc.PaymentHash, 0, true,
 			))
 			err = errors.Errorf("unable to add circuit: "+
 				"%v", err)
@@ -472,20 +473,28 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 	// We've just received a settle packet which means we can finalize the
 	// payment circuit by forwarding the settle msg to the channel from
 	// which htlc add packet was initially received.
-	case *lnwire.UpdateFufillHTLC, *lnwire.UpdateFailHTLC:
+	case *settlePacket, *failPacket:
+		var payHash [sha256.Size]byte
+		switch p := packet.(type) {
+		case *settlePacket:
+			payHash = p.payHash
+		case *failPacket:
+			payHash = p.payHash
+		}
 		// Exit if we can't find and remove the active circuit to
 		// continue propagating the fail over.
-		circuit, err := s.circuits.remove(packet.payHash)
+		circuit, err := s.circuits.remove(payHash)
 		if err != nil {
 			err := errors.Errorf("unable to remove "+
-				"circuit for payment hash: %v", packet.payHash)
+				"circuit for payment hash: %v", payHash)
 			log.Error(err)
 			return err
 		}
 
 		// If this is failure than we need to obfuscate the error.
-		if htlc, ok := htlc.(*lnwire.UpdateFailHTLC); ok && !packet.isObfuscated {
-			htlc.Reason = circuit.Obfuscator.BackwardObfuscate(htlc.Reason)
+		if packet, ok := packet.(*failPacket); ok && !packet.isObfuscated {
+			packet.htlc.Reason = circuit.Obfuscator.BackwardObfuscate(
+				packet.htlc.Reason)
 		}
 
 		// Propagating settle/fail htlc back to src of add htlc packet.
@@ -499,7 +508,7 @@ func (s *Switch) handlePacketForward(packet *htlcPacket) error {
 		}
 
 		log.Debugf("Closing completed onion "+
-			"circuit for %x: %v<->%v", packet.payHash[:],
+			"circuit for %x: %v<->%v", payHash[:],
 			circuit.Src, circuit.Dest)
 
 		source.HandleSwitchPacket(packet)
@@ -608,15 +617,21 @@ func (s *Switch) htlcForwarder() {
 				amount      btcutil.Amount
 			)
 
-			switch m := cmd.pkt.htlc.(type) {
-			case *lnwire.UpdateAddHTLC:
-				paymentHash = m.PaymentHash
-				amount = m.Amount
-			case *lnwire.UpdateFufillHTLC, *lnwire.UpdateFailHTLC:
-				paymentHash = cmd.pkt.payHash
-				amount = cmd.pkt.amount
+			switch p := cmd.pkt.(type) {
+			case *addPacket:
+				paymentHash = p.htlc.PaymentHash
+				amount = p.htlc.Amount
+			case *initPacket:
+				paymentHash = p.htlc.PaymentHash
+				amount = p.htlc.Amount
+			case *settlePacket:
+				paymentHash = p.payHash
+				amount = p.amount
+			case *failPacket:
+				paymentHash = p.payHash
+				amount = p.amount
 			default:
-				cmd.err <- errors.New("wrong type of update")
+				cmd.err <- errors.New("wrong type of packet")
 				return
 			}
 

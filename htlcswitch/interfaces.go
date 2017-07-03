@@ -43,7 +43,7 @@ type ChannelLink interface {
 	// forwarded to us from another channel link in case the htlc update
 	// came from another peer or if the update was created by user
 	// initially.
-	HandleSwitchPacket(*htlcPacket)
+	HandleSwitchPacket(packet Packet)
 
 	// HandleChannelUpdate handles the htlc requests as settle/add/fail
 	// which sent to us from remote peer we have a channel with.

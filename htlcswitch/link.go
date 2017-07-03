@@ -173,7 +173,7 @@ type channelLink struct {
 	// downstream is a channel in which new multi-hop HTLC's to be
 	// forwarded will be sent across. Messages from this channel are sent
 	// by the HTLC switch.
-	downstream chan *htlcPacket
+	downstream chan Packet
 
 	// linkControl is a channel which is used to query the state of the
 	// link, or update various policies used which govern if an HTLC is to
@@ -202,7 +202,7 @@ func NewChannelLink(cfg ChannelLinkConfig,
 		channel:           channel,
 		clearedOnionBlobs: make(map[uint64][]byte),
 		upstream:          make(chan lnwire.Message),
-		downstream:        make(chan *htlcPacket),
+		downstream:        make(chan Packet),
 		linkControl:       make(chan interface{}),
 		cancelReasons:     make(map[uint64]lnwire.OpaqueReason),
 		logCommitTimer:    time.NewTimer(300 * time.Millisecond),
@@ -352,7 +352,7 @@ out:
 		// we'll attempt to re-process the packet in order to allow it
 		// to continue propagating within the network.
 		case packet := <-l.overflowQueue.pending:
-			msg := packet.htlc.(*lnwire.UpdateAddHTLC)
+			msg := packet.Update().(*lnwire.UpdateAddHTLC)
 			log.Tracef("Reprocessing downstream add update "+
 				"with payment hash(%x)",
 				msg.PaymentHash[:])
@@ -367,7 +367,7 @@ out:
 			// this to the overflow rather than processing it
 			// directly. Once an active HTLC is either settled or
 			// failed, then we'll free up a new slot.
-			htlc, ok := pkt.htlc.(*lnwire.UpdateAddHTLC)
+			htlc, ok := pkt.Update().(*lnwire.UpdateAddHTLC)
 			if ok && l.overflowQueue.length() != 0 {
 				log.Infof("Downstream htlc add update with "+
 					"payment hash(%x) have been added to "+
@@ -409,9 +409,9 @@ out:
 // Switch. Possible messages sent by the switch include requests to forward new
 // HTLCs, timeout previously cleared HTLCs, and finally to settle currently
 // cleared HTLCs with the upstream peer.
-func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
+func (l *channelLink) handleDownStreamPkt(pkt Packet) {
 	var isSettle bool
-	switch htlc := pkt.htlc.(type) {
+	switch htlc := pkt.Update().(type) {
 	case *lnwire.UpdateAddHTLC:
 		// A new payment has been initiated via the downstream channel,
 		// so we add the new HTLC to our local log, then update the
@@ -492,7 +492,7 @@ func (l *channelLink) handleDownStreamPkt(pkt *htlcPacket) {
 	case *lnwire.UpdateFailHTLC:
 		// An HTLC cancellation has been triggered somewhere upstream,
 		// we'll remove then HTLC from our local state machine.
-		logIndex, err := l.channel.FailHTLC(pkt.payHash)
+		logIndex, err := l.channel.FailHTLC(pkt.(*failPacket).payHash)
 		if err != nil {
 			log.Errorf("unable to cancel HTLC: %v", err)
 			return
@@ -795,7 +795,7 @@ func (l *channelLink) String() string {
 // another peer or if the update was created by user
 //
 // NOTE: Part of the ChannelLink interface.
-func (l *channelLink) HandleSwitchPacket(packet *htlcPacket) {
+func (l *channelLink) HandleSwitchPacket(packet Packet) {
 	select {
 	case l.downstream <- packet:
 	case <-l.quit:
@@ -819,11 +819,11 @@ func (l *channelLink) HandleChannelUpdate(message lnwire.Message) {
 // updates is locked-in, then it can be acted upon, meaning: settling htlc's,
 // cancelling them, or forwarding new HTLC's to the next hop.
 func (l *channelLink) processLockedInHtlcs(
-	paymentDescriptors []*lnwallet.PaymentDescriptor) []*htlcPacket {
+	paymentDescriptors []*lnwallet.PaymentDescriptor) []Packet {
 
 	var (
 		needUpdate       bool
-		packetsToForward []*htlcPacket
+		packetsToForward []Packet
 	)
 
 	for _, pd := range paymentDescriptors {

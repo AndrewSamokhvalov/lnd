@@ -360,7 +360,7 @@ type mockChannelLink struct {
 
 	peer Peer
 
-	packets chan *htlcPacket
+	packets chan Packet
 }
 
 func newMockChannelLink(chanID lnwire.ChannelID, shortChanID lnwire.ShortChannelID,
@@ -369,12 +369,12 @@ func newMockChannelLink(chanID lnwire.ChannelID, shortChanID lnwire.ShortChannel
 	return &mockChannelLink{
 		chanID:      chanID,
 		shortChanID: shortChanID,
-		packets:     make(chan *htlcPacket, 1),
+		packets:     make(chan Packet, 1),
 		peer:        peer,
 	}
 }
 
-func (f *mockChannelLink) HandleSwitchPacket(packet *htlcPacket) {
+func (f *mockChannelLink) HandleSwitchPacket(packet Packet) {
 	f.packets <- packet
 }
 

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/roasbeef/btcutil"
 )
 
 // TestWaitingQueueThreadSafety test the thread safety properties of the
@@ -17,22 +16,21 @@ func TestWaitingQueueThreadSafety(t *testing.T) {
 
 	q := newWaitingQueue()
 
-	a := make([]btcutil.Amount, 1000)
+	a := make([]uint64, 1000)
 	for i := 0; i < len(a); i++ {
-		a[i] = btcutil.Amount(i)
-		q.consume(&htlcPacket{
-			amount: btcutil.Amount(i),
-			htlc:   &lnwire.UpdateAddHTLC{},
+		a[i] = uint64(i)
+		q.consume(&initPacket{
+			htlc: &lnwire.UpdateAddHTLC{ID: uint64(i)},
 		})
 	}
 
-	var b []btcutil.Amount
+	var b []uint64
 	for i := 0; i < len(a); i++ {
 		q.release()
 
 		select {
 		case packet := <-q.pending:
-			b = append(b, packet.amount)
+			b = append(b, uint64(packet.Update().(*lnwire.UpdateAddHTLC).ID))
 
 		case <-time.After(2 * time.Second):
 			t.Fatal("timeout")

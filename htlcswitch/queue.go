@@ -21,7 +21,7 @@ type packetQueue struct {
 
 	// pending channel is needed in order to send the object which should
 	// be re-proceed.
-	pending chan *htlcPacket
+	pending chan Packet
 
 	// grab channel represents the channel-lock which is needed in order to
 	// make "release" goroutines block during other release goroutine
@@ -36,7 +36,7 @@ func newWaitingQueue() *packetQueue {
 	done <- struct{}{}
 
 	return &packetQueue{
-		pending: make(chan *htlcPacket),
+		pending: make(chan Packet),
 		grab:    done,
 		List:    list.New(),
 	}
@@ -44,7 +44,7 @@ func newWaitingQueue() *packetQueue {
 
 // consume function take the given packet and store it in queue till release
 // function will be executed.
-func (q *packetQueue) consume(packet *htlcPacket) {
+func (q *packetQueue) consume(packet Packet) {
 	q.Lock()
 	defer q.Unlock()
 
@@ -82,7 +82,7 @@ func (q *packetQueue) release() {
 		if e != nil {
 			// Send the object in object queue and wait it to be
 			// processed by other side.
-			q.pending <- e.Value.(*htlcPacket)
+			q.pending <- e.Value.(Packet)
 
 			// After object have been preprocessed remove it from
 			// the queue.
@@ -109,8 +109,8 @@ func (q *packetQueue) pendingAmount() btcutil.Amount {
 
 	var amount btcutil.Amount
 	for e := q.Front(); e != nil; e = e.Next() {
-		packet := e.Value.(*htlcPacket)
-		htlc := packet.htlc.(*lnwire.UpdateAddHTLC)
+		packet := e.Value.(Packet)
+		htlc := packet.Update().(*lnwire.UpdateAddHTLC)
 		amount += htlc.Amount
 	}
 

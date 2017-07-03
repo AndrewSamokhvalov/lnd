@@ -32,8 +32,6 @@ var (
 func TestSwitchForward(t *testing.T) {
 	t.Parallel()
 
-	var packet *htlcPacket
-
 	alicePeer := newMockServer(t, "alice")
 	bobPeer := newMockServer(t, "bob")
 
@@ -56,7 +54,7 @@ func TestSwitchForward(t *testing.T) {
 	// bob channel link.
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
-	packet = newAddPacket(
+	addPacket := newAddPacket(
 		aliceChannelLink.ShortChanID(),
 		bobChannelLink.ShortChanID(),
 		&lnwire.UpdateAddHTLC{
@@ -66,7 +64,7 @@ func TestSwitchForward(t *testing.T) {
 	)
 
 	// Handle the request and checks that bob channel link received it.
-	if err := s.forward(packet); err != nil {
+	if err := s.forward(addPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,15 +82,14 @@ func TestSwitchForward(t *testing.T) {
 	// Create settle request pretending that bob link handled the add htlc
 	// request and sent the htlc settle request back. This request should
 	// be forwarder back to Alice link.
-	packet = newSettlePacket(
+	settlePacket := newSettlePacket(
 		bobChannelLink.ShortChanID(),
 		&lnwire.UpdateFufillHTLC{
 			PaymentPreimage: preimage,
-		},
-		rhash, 1)
+		}, rhash, 1)
 
 	// Handle the request and checks that payment circuit works properly.
-	if err := s.forward(packet); err != nil {
+	if err := s.forward(settlePacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -113,8 +110,6 @@ func TestSwitchForward(t *testing.T) {
 func TestSwitchCancel(t *testing.T) {
 	t.Parallel()
 
-	var request *htlcPacket
-
 	alicePeer := newMockServer(t, "alice")
 	bobPeer := newMockServer(t, "bob")
 
@@ -136,7 +131,7 @@ func TestSwitchCancel(t *testing.T) {
 	// to bob channel link.
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
-	request = newAddPacket(
+	addPacket := newAddPacket(
 		aliceChannelLink.ShortChanID(),
 		bobChannelLink.ShortChanID(),
 		&lnwire.UpdateAddHTLC{
@@ -146,7 +141,7 @@ func TestSwitchCancel(t *testing.T) {
 	)
 
 	// Handle the request and checks that bob channel link received it.
-	if err := s.forward(request); err != nil {
+	if err := s.forward(addPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -164,13 +159,13 @@ func TestSwitchCancel(t *testing.T) {
 	// Create settle request pretending that bob channel link handled
 	// the add htlc request and sent the htlc settle request back. This
 	// request should be forwarder back to alice channel link.
-	request = newFailPacket(
+	failPacket := newFailPacket(
 		bobChannelLink.ShortChanID(),
 		&lnwire.UpdateFailHTLC{},
 		rhash, 1, true)
 
 	// Handle the request and checks that payment circuit works properly.
-	if err := s.forward(request); err != nil {
+	if err := s.forward(failPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -191,8 +186,6 @@ func TestSwitchCancel(t *testing.T) {
 func TestSwitchAddSamePayment(t *testing.T) {
 	t.Parallel()
 
-	var request *htlcPacket
-
 	alicePeer := newMockServer(t, "alice")
 	bobPeer := newMockServer(t, "bob")
 
@@ -214,7 +207,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	// to bob channel link.
 	preimage := [sha256.Size]byte{1}
 	rhash := fastsha256.Sum256(preimage[:])
-	request = newAddPacket(
+	addPacket := newAddPacket(
 		aliceChannelLink.ShortChanID(),
 		bobChannelLink.ShortChanID(),
 		&lnwire.UpdateAddHTLC{
@@ -224,7 +217,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	)
 
 	// Handle the request and checks that bob channel link received it.
-	if err := s.forward(request); err != nil {
+	if err := s.forward(addPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -240,7 +233,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	}
 
 	// Handle the request and checks that bob channel link received it.
-	if err := s.forward(request); err != nil {
+	if err := s.forward(addPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,13 +244,13 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	// Create settle request pretending that bob channel link handled
 	// the add htlc request and sent the htlc settle request back. This
 	// request should be forwarder back to alice channel link.
-	request = newFailPacket(
+	failPacket := newFailPacket(
 		bobChannelLink.ShortChanID(),
 		&lnwire.UpdateFailHTLC{},
 		rhash, 1, true)
 
 	// Handle the request and checks that payment circuit works properly.
-	if err := s.forward(request); err != nil {
+	if err := s.forward(failPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -273,7 +266,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 	}
 
 	// Handle the request and checks that payment circuit works properly.
-	if err := s.forward(request); err != nil {
+	if err := s.forward(failPacket); err != nil {
 		t.Fatal(err)
 	}
 
@@ -370,11 +363,10 @@ func TestSwitchSendPayment(t *testing.T) {
 		&lnwire.UpdateFailHTLC{
 			Reason: reason,
 			ID:     1,
-		},
-		rhash, 1, true)
+		}, rhash, 1, true)
 
 	if err := s.forward(packet); err != nil {
-		t.Fatalf("can't forward htlc packet: %v", err)
+		t.Fatalf("unable to forward htlc packet: %v", err)
 	}
 
 	select {
@@ -389,7 +381,7 @@ func TestSwitchSendPayment(t *testing.T) {
 	// Send second failure response and check that user were able to
 	// receive the error.
 	if err := s.forward(packet); err != nil {
-		t.Fatalf("can't forward htlc packet: %v", err)
+		t.Fatalf("unable to forward htlc packet: %v", err)
 	}
 
 	select {
