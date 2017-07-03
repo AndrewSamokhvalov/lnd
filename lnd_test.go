@@ -2045,10 +2045,18 @@ out:
 		t.Fatalf("unable to create payment stream: %v", err)
 	}
 
+	var rhash [sha256.Size]byte
+	copy(rhash[:], carolInvoice.RHash)
+	payReqString = zpay32.Encode(&zpay32.PaymentRequest{
+		PaymentHash: rhash,
+		Destination: carolPubkey,
+		Amount:      payAmt + 1, // wrong amount
+	})
+
 	// Next, we'll test the case of a recognized payHash but, an incorrect
 	// value on the extended HTLC.
 	sendReq = &lnrpc.SendRequest{
-		PaymentRequest: carolInvoice.PaymentRequest,
+		PaymentRequest: payReqString,
 	}
 	if err := alicePayStream.Send(sendReq); err != nil {
 		t.Fatalf("unable to send payment: %v", err)
@@ -2541,8 +2549,8 @@ func testAsyncPayments(net *networkHarness, t *harnessTest) {
 	now := time.Now()
 	for i := 0; i < numPayments; i++ {
 		sendReq := &lnrpc.SendRequest{
-			Dest:        net.Bob.PubKey[:],
-			Amt:         paymentAmt,
+			Dest: net.Bob.PubKey[:],
+			Amt:  paymentAmt,
 		}
 
 		if err := alicePayStream.Send(sendReq); err != nil {
