@@ -2042,6 +2042,103 @@ func marshallTopologyChange(topChange *routing.TopologyChange) *lnrpc.GraphTopol
 	}
 }
 
+//// SubscribeChannelGraph launches a streaming RPC that allows the caller to
+//// receive notifications upon any changes the channel graph topology from the
+//// review of the responding node. Events notified include: new nodes coming
+//// online, nodes updating their authenticated attributes, new channels being
+//// advertised, updates in the routing policy for a directional channel edge,
+//// and finally when prior channels are closed on-chain.
+//func (r *rpcServer) SubscribeOnPaymentNotifications(req *lnrpc.PaymentSubscription,
+//	updateStream lnrpc.Lightning_SubscribeChannelGraphServer) error {
+//
+//	// Get channel linl, by restoring channle outpoint and thn channel id in
+//	// order to subscribe on channel payment notifications.
+//	h, err := chainhash.NewHash(req.ChannelPoint.FundingTxid)
+//	if err != nil {
+//		return err
+//	}
+//
+//	chanID := lnwire.NewChanIDFromOutPoint(&wire.OutPoint{
+//		Hash:  *h,
+//		Index: req.ChannelPoint.OutputIndex,
+//	})
+//
+//	link, err := r.server.htlcSwitch.GetLink(chanID)
+//	if err != nil {
+//		return err
+//	}
+//
+//	// First, we start by subscribing to a new intent to receive
+//	// notifications from the channel router.
+//	link.SubscribeOnPaymentNotifications()
+//
+//	// Ensure that the resources for the topology update client is cleaned
+//	// up once either the server, or client exists.
+//	defer client.Cancel()
+//
+//	for {
+//		select {
+//
+//		// A new update has been sent by the channel router, we'll
+//		// marshal it into the form expected by the gRPC client, then
+//		// send it off.
+//		case topChange, ok := <-client.TopologyChanges:
+//			// If the second value from the channel read is nil,
+//			// then this means that the channel router is exiting
+//			// or the notification client was cancelled. So we'll
+//			// exit early.
+//			if !ok {
+//				return errors.New("server shutting down")
+//			}
+//
+//			// Convert the struct from the channel router into the
+//			// form expected by the gRPC service then send it off
+//			// to the client.
+//			graphUpdate := marshallTopologyChange(topChange)
+//			if err := updateStream.Send(graphUpdate); err != nil {
+//				return err
+//			}
+//
+//		// The server is quitting, so we'll exit immediately. Returning
+//		// nil will close the clients read end of the stream.
+//		case <-r.quit:
+//			return nil
+//		}
+//	}
+//}
+//
+//// marshallPaymentNotification performs a mapping from the topology change sturct
+//// returned by the router to the form of notifications expected by the current
+//// gRPC service.
+//func marshallPaymentNotification(notification interface{}) (*lnrpc.PaymentNotification,
+//	error) {
+//	var paymentReceived *lnrpc.PaymentReceived
+//	var paymentForwarded *lnrpc.PaymentForwarded
+//
+//	switch n := notification.(type) {
+//	case *htlcswitch.PaymentNotification:
+//		paymentReceived = &lnrpc.PaymentReceived{
+//			SenderIdentityKey: n.SenderPubKey.SerializeCompressed(),
+//			SenderDescription: n.SenderDescription,
+//			PaymentHash:       n.PaymentHash[:],
+//			Amount:            int64(n.Amount),
+//		}
+//	case *htlcswitch.ForwardNotification:
+//		paymentForwarded = &lnrpc.PaymentForwarded{
+//			Amount:      int64(n.Amount),
+//			PaymentHash: n.PaymentHash[:],
+//			Fee:         int64(n.EarnedFee),
+//		}
+//	default:
+//		return nil, errors.New("unknown notification type")
+//	}
+//
+//	return &lnrpc.PaymentNotification{
+//		PaymentReceived:  paymentReceived,
+//		PaymentForwarded: paymentForwarded,
+//	}, nil
+//}
+
 // ListPayments returns a list of all outgoing payments.
 func (r *rpcServer) ListPayments(context.Context,
 	*lnrpc.ListPaymentsRequest) (*lnrpc.ListPaymentsResponse, error) {

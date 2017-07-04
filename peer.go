@@ -110,10 +110,6 @@ type peer struct {
 	// objects to queue messages to be sent out on the wire.
 	outgoingQueue chan outgoinMsg
 
-	// sendQueueSync is used as a semaphore to synchronize writes between
-	// the writeHandler and the queueHandler.
-	sendQueueSync chan struct{}
-
 	// activeChannels is a map which stores the state machines of all
 	// active channels. Channels are indexed into the map by the txid of
 	// the funding transaction which opened the channel.
@@ -171,7 +167,6 @@ func newPeer(conn net.Conn, connReq *connmgr.ConnReq, server *server,
 
 		server: server,
 
-		sendQueueSync: make(chan struct{}, 1),
 		sendQueue:     make(chan outgoinMsg, 1),
 		outgoingQueue: make(chan outgoinMsg, outgoingQueueLen),
 

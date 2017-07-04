@@ -46,9 +46,10 @@ type mockServer struct {
 var _ Peer = (*mockServer)(nil)
 
 func newMockServer(t *testing.T, name string) *mockServer {
-	var id [33]byte
+	var id [btcec.PubKeyBytesLenCompressed]byte
 	h := sha256.Sum256([]byte(name))
-	copy(id[:], h[:])
+	_, pubKey := btcec.PrivKeyFromBytes(btcec.S256(), h[:])
+	copy(id[:], pubKey.SerializeCompressed())
 
 	return &mockServer{
 		t:        t,

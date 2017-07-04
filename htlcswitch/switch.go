@@ -73,7 +73,7 @@ type ChanClose struct {
 	// ChanPoint represent the id of the channel which should be closed.
 	ChanPoint *wire.OutPoint
 
-	// Updates is used by request creator to receive the notifications about
+	// Updates is used by request creator to receive the Notifications about
 	// execution of the close channel request.
 	Updates chan *lnrpc.CloseStatusUpdate
 

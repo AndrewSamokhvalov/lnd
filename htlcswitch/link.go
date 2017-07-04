@@ -175,6 +175,9 @@ type channelLink struct {
 	// by the HTLC switch.
 	downstream chan Packet
 
+	// notificationClient...
+	notificationClient *PaymentNotificationsClient
+
 	// linkControl is a channel which is used to query the state of the
 	// link, or update various policies used which govern if an HTLC is to
 	// be forwarded and/or accepted.
@@ -198,16 +201,17 @@ func NewChannelLink(cfg ChannelLinkConfig,
 	channel *lnwallet.LightningChannel) ChannelLink {
 
 	return &channelLink{
-		cfg:               cfg,
-		channel:           channel,
-		clearedOnionBlobs: make(map[uint64][]byte),
-		upstream:          make(chan lnwire.Message),
-		downstream:        make(chan Packet),
-		linkControl:       make(chan interface{}),
-		cancelReasons:     make(map[uint64]lnwire.OpaqueReason),
-		logCommitTimer:    time.NewTimer(300 * time.Millisecond),
-		overflowQueue:     newWaitingQueue(),
-		quit:              make(chan struct{}),
+		cfg:                cfg,
+		channel:            channel,
+		clearedOnionBlobs:  make(map[uint64][]byte),
+		upstream:           make(chan lnwire.Message),
+		downstream:         make(chan Packet),
+		linkControl:        make(chan interface{}),
+		cancelReasons:      make(map[uint64]lnwire.OpaqueReason),
+		logCommitTimer:     time.NewTimer(300 * time.Millisecond),
+		overflowQueue:      newWaitingQueue(),
+		notificationClient: getNotificationClient(),
+		quit:               make(chan struct{}),
 	}
 }
 
@@ -827,6 +831,10 @@ func (l *channelLink) processLockedInHtlcs(
 	)
 
 	for _, pd := range paymentDescriptors {
+		var (
+			senderPubKey             *btcec.PublicKey
+			senderPaymentDescription []byte
+		)
 		// TODO(roasbeef): rework log entries to a shared
 		// interface.
 		switch pd.EntryType {
@@ -846,6 +854,13 @@ func (l *channelLink) processLockedInHtlcs(
 			// freed up within the commitment state.
 			packetsToForward = append(packetsToForward, settlePacket)
 			l.overflowQueue.release()
+
+			l.notificationClient.Notify(l.ShortChanID(), &ForwardNotification{
+				Time:        time.Now(),
+				Amount:      pd.Amount,
+				PaymentHash: pd.RHash,
+				EarnedFee:   0,
+			})
 
 		// A failure message for a previously forwarded HTLC has been
 		// received. As a result a new slot will be freed up in our
@@ -962,6 +977,9 @@ func (l *channelLink) processLockedInHtlcs(
 							continue
 						}
 						preimage = sphinxPayment.PaymentPreimage
+						senderPubKey = sphinxPayment.PubKey
+						fmt.Println(senderPubKey)
+						senderPaymentDescription = sphinxPayment.Description
 					} else {
 						log.Errorf("unable to query to locate: %v", err)
 						failure := lnwire.FailUnknownPaymentHash{}
@@ -1038,6 +1056,15 @@ func (l *channelLink) processLockedInHtlcs(
 						return nil
 					}
 				}
+
+				// Notify all subscribed clients about received payment.
+				l.notificationClient.Notify(l.ShortChanID(), &PaymentNotification{
+					Time:              time.Now(),
+					Amount:            pd.Amount,
+					PaymentHash:       pd.RHash,
+					SenderDescription: senderPaymentDescription,
+					SenderPubKey:      senderPubKey,
+				})
 
 				// HTLC was successfully settled locally send
 				// notification about it remote peer.
@@ -1154,7 +1181,8 @@ func (l *channelLink) processLockedInHtlcs(
 				addMsg.OnionBlob = buf.Bytes()
 
 				updatePacket := newAddPacket(l.ShortChanID(),
-					fwdInfo.NextHop, addMsg, obfuscator)
+					fwdInfo.NextHop, addMsg, obfuscator, senderPubKey,
+					senderPaymentDescription)
 				packetsToForward = append(packetsToForward, updatePacket)
 			}
 		}

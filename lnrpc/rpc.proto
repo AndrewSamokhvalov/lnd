@@ -600,6 +600,27 @@ message ClosedChannelUpdate {
     ChannelPoint chan_point = 4;
 }
 
+message PaymentSubscription {
+    ChannelPoint channel_point = 1;
+}
+message PaymentNotification {
+    PaymentReceived  payment_received = 1;
+    PaymentForwarded payment_forwarded = 2;
+}
+
+message PaymentReceived {
+    bytes sender_identity_key = 1;
+    bytes sender_description = 2;
+    int64 amount = 3;
+    bytes payment_hash = 4;
+}
+
+message PaymentForwarded {
+    int64 amount = 1;
+    int64 fee = 2;
+    bytes payment_hash = 3;
+}
+
 message SetAliasRequest {
     string new_alias = 1;
 }

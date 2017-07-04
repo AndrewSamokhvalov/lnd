@@ -1033,6 +1033,13 @@ func TestSphinxPayment(t *testing.T) {
 	secondBobBandwidthBefore := n.secondBobChannelLink.Bandwidth()
 	aliceBandwidthBefore := n.aliceChannelLink.Bandwidth()
 
+	client := getNotificationClient()
+	listener, err := client.Register(n.carolChannelLink.ShortChanID())
+	if err != nil {
+		t.Fatalf("unable register carol payment listener: %v", err)
+	}
+	defer listener.Stop()
+
 	debug := false
 	if debug {
 		// Log messages that alice receives from bob.
@@ -1066,7 +1073,7 @@ func TestSphinxPayment(t *testing.T) {
 	// * settle request to be sent back from Bob to Alice.
 	// * Alice<->Bob commitment states to be updated.
 	// * user notification to be sent.
-	err := n.makeSphinxPayment(n.aliceServer, n.bobServer.PubKey(), hops,
+	err = n.makeSphinxPayment(n.aliceServer, n.bobServer.PubKey(), hops,
 		htlcAmt, totalTimelock)
 	if err != nil {
 		t.Fatalf("unable to send payment: %v", err)
@@ -1074,6 +1081,18 @@ func TestSphinxPayment(t *testing.T) {
 
 	// Wait for Bob to receive the revocation.
 	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case obj := <-listener.Notifications:
+		notification := obj.(*PaymentNotification)
+		alicePubKey := n.aliceServer.PubKey()
+		if !bytes.Equal(notification.SenderPubKey.SerializeCompressed(),
+			alicePubKey[:]) {
+			t.Fatal("wrong pub key")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("haven't received payment notification")
+	}
 
 	expectedAliceBandwidth := aliceBandwidthBefore - htlcAmt
 	if expectedAliceBandwidth != n.aliceChannelLink.Bandwidth() {

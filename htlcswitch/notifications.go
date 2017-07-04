@@ -7,6 +7,8 @@ import (
 
 	"sync/atomic"
 
+	"time"
+
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
@@ -23,22 +25,24 @@ var once sync.Once
 
 // getNotificationClient...
 func getNotificationClient() *PaymentNotificationsClient {
-	once.Do(func() {
-		client = &PaymentNotificationsClient{
-			listeners:     make(map[lnwire.ShortChannelID][]*Listener),
-			outgoingQueue: make(chan pendingNotification),
-			control:       make(chan interface{}),
-			quit:          make(chan struct{}),
-		}
-	})
 	return client
+}
+
+func init() {
+	client = &PaymentNotificationsClient{
+		listeners:     make(map[lnwire.ShortChannelID][]*Listener),
+		outgoingQueue: make(chan pendingNotification),
+		control:       make(chan interface{}),
+		quit:          make(chan struct{}),
+	}
+	client.Start()
 }
 
 // closeRequest...
 type closeRequest lnwire.ShortChannelID
 
 // unregisterRequest...
-type unregisterRequest lnwire.ShortChannelID
+type unregisterRequest *Listener
 
 // registerRequest...
 type registerRequest struct {
@@ -60,14 +64,10 @@ type pendingNotification struct {
 
 // Listener...
 type Listener struct {
-	stopped       chan struct{}
-	notifications chan interface{}
-}
+	chanID        lnwire.ShortChannelID
+	Notifications chan interface{}
 
-// Stop...
-func (l *Listener) Stop() {
-	close(l.stopped)
-	close(l.notifications)
+	Stop func()
 }
 
 // PaymentNotificationsClient...
@@ -127,44 +127,32 @@ func (c *PaymentNotificationsClient) queueHandler() {
 
 	pendingQueue := list.New()
 	for {
-		// Before add a queue'd message our pending message queue,
-		// we'll first try to aggressively empty out our pending list of
-		// messaging.
-		for {
-			// Examine the front of the queue. If this message is
-			// nil, then we've emptied out the queue and can accept
-			// new messages from outside sub-systems.
-			elem := pendingQueue.Front()
-			if elem == nil {
-				break
-			}
-			pn := elem.Value.(pendingNotification)
-
+		// In order to not work in a blank wait for at least one object to be
+		// added in the pending queue.
+		if pendingQueue.Len() == 0 {
 			select {
-			case pn.listener.notifications <- pn.notification:
-				pendingQueue.Remove(elem)
-
-			// If lister was stopped or channel have been closed and listener
-			// have been unregistered, than remove notification from processing.
-			case <-pn.listener.stopped:
-				pendingQueue.Remove(elem)
+			case ntf := <-c.outgoingQueue:
+				pendingQueue.PushBack(ntf)
 			case <-c.quit:
 				return
-			default:
-				break
 			}
 		}
 
-		// If there weren't any messages to send, or the writehandler
-		// is still blocked, then we'll accept a new message into the
-		// queue from outside sub-systems.
+		// Examine the front of the queue, at this point we have an object
+		// which should be sent to the listener.
+		elem := pendingQueue.Front()
+		pn := elem.Value.(pendingNotification)
+
 		select {
-		case <-c.quit:
-			return
+		case pn.listener.Notifications <- pn.notification:
+			pendingQueue.Remove(elem)
+
 		case ntf := <-c.outgoingQueue:
 			pendingQueue.PushBack(ntf)
-		}
 
+		case <-c.quit:
+			return
+		}
 	}
 }
 
@@ -180,31 +168,24 @@ func (c *PaymentNotificationsClient) controlHandler() {
 			switch r := request.(type) {
 			case registerRequest:
 				listener := &Listener{
-					stopped:       make(chan struct{}),
-					notifications: make(chan interface{}),
+					chanID:        r.chanID,
+					Notifications: make(chan interface{}),
 				}
+
+				listener.Stop = func() {
+					select {
+					case c.control <- (unregisterRequest)(listener):
+					case <-c.quit:
+					}
+				}
+
 				c.listeners[r.chanID] = append(c.listeners[r.chanID], listener)
 				r.done <- listener
 
 			case notificationRequest:
 				// Create pending notification for all notification listeners
 				// for this channel.
-				for i, listener := range c.listeners[r.chanID] {
-
-					// Check that lister haven't been stopped, and if
-					// been than remove it from the list and skip notification.
-					select {
-					case <-listener.stopped:
-						listeners := c.listeners[r.chanID]
-						// Delete without preserving order
-						// Google: Golang slice tricks
-						listeners[i] = listeners[len(listeners)-1]
-						listeners[len(listeners)-1] = nil
-						c.listeners[r.chanID] = listeners[:len(listeners)-1]
-						continue
-					default:
-					}
-
+				for _, listener := range c.listeners[r.chanID] {
 					// Create pending notification and attach the listener so
 					// that we could send the notification when lister will
 					// be available.
@@ -213,6 +194,23 @@ func (c *PaymentNotificationsClient) controlHandler() {
 						listener:     listener,
 					}
 				}
+			case unregisterRequest:
+				l := (*Listener)(r)
+
+				listeners := c.listeners[r.chanID]
+				for i, listener := range listeners {
+					if listener == l {
+						// Delete without preserving order
+						// Google: Golang slice tricks
+						listeners[i] = listeners[len(listeners)-1]
+						listeners[len(listeners)-1] = nil
+						c.listeners[r.chanID] = listeners[:len(listeners)-1]
+						break
+					}
+				}
+
+				// ...
+				l.Notifications = nil
 
 			case closeRequest:
 				chanID := lnwire.ShortChannelID(r)
@@ -272,6 +270,9 @@ func (c *PaymentNotificationsClient) Register(chanID lnwire.ShortChannelID) (
 
 // PaymentNotification...
 type PaymentNotification struct {
+	// Time...
+	Time time.Time
+
 	// SenderPubKey...
 	// NOTE: Optional field, which is populated only
 	SenderPubKey *btcec.PublicKey
@@ -289,12 +290,15 @@ type PaymentNotification struct {
 
 // ForwardNotification...
 type ForwardNotification struct {
+	// Time...
+	Time time.Time
+
 	// Amount...
 	Amount btcutil.Amount
 
 	// PaymentHash...
 	PaymentHash lnwallet.PaymentHash
 
-	// HTLCFee...
-	HTLCFee btcutil.Amount
+	// EarnedFee...
+	EarnedFee btcutil.Amount
 }

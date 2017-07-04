@@ -14,12 +14,12 @@ import (
 	"github.com/roasbeef/btcutil"
 )
 
-// TopologyClient represents an intent to receive notifications from the
+// PaymentNotificationsClient represents an intent to receive notifications from the
 // channel router regarding changes to the topology of the channel graph. The
-// TopologyChanges channel will be sent upon with new updates to the channel
+// PaymentNotifications channel will be sent upon with new updates to the channel
 // graph in real-time as they're encountered.
 type TopologyClient struct {
-	// TopologyChanges is a receive only channel that new channel graph
+	// PaymentNotifications is a receive only channel that new channel graph
 	// updates will be sent over.
 	//
 	// TODO(roasbeef): chan for each update type instead?

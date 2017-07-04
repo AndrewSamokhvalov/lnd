@@ -333,7 +333,7 @@ func generateBlob(e2ePayload []byte, hops ...ForwardingInfo) ([]byte, error) {
 		return nil, errors.New("empty path")
 	}
 
-	copy(hops[len(hops) - 1].E2EPayload[:], e2ePayload)
+	copy(hops[len(hops)-1].E2EPayload[:], e2ePayload)
 	iterator := newMockHopIterator(hops...)
 
 	var b bytes.Buffer
@@ -494,10 +494,18 @@ func (n *threeHopNetwork) makeSphinxPayment(sendingPeer Peer,
 		return err
 	}
 
+	senderPubKey := sendingPeer.PubKey()
+	pubKey, err := btcec.ParsePubKey(senderPubKey[:], btcec.S256())
+	if err != nil {
+		return err
+	}
+
 	// Generate sphinx payment, payment without creation of the invoice, and
 	// place it in payment e2e payload.
 	var b bytes.Buffer
 	payment := applications.NewSphinxPayment(preimage)
+	payment.SetPubKey(pubKey)
+	payment.SetDescription([]byte("covfefe for me please"))
 	if err := applications.EncodeE2EPayload(payment, &b); err != nil {
 		return err
 	}
@@ -527,7 +535,7 @@ func (n *threeHopNetwork) makeSphinxPayment(sendingPeer Peer,
 	select {
 	case err := <-errChan:
 		return err
-	case <-time.After(50 * time.Second):
+	case <-time.After(3 * time.Second):
 		return errors.New("htlc was not settled in time")
 	}
 }

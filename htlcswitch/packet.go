@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/ltcsuite/ltcd/btcec"
+	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcutil"
 )
 
@@ -64,18 +64,31 @@ type addPacket struct {
 	// TODO(andrew.shvv) revisit after refactoring the way of returning errors
 	// inside the htlcswitch packet.
 	obfuscator Obfuscator
+
+	// senderPubKey the pubkey of the payment sender.
+	// NOTE: Populated only on the last hop, only if it was sphinx payment,
+	// and if sender sent this information.
+	senderPubKey *btcec.PublicKey
+
+	// paymentDescription the additional data which is carried from the payment
+	// sender to payment receiver.
+	// NOTE: Populated only on the last hop, only if it was sphinx payment,
+	// and if sender sent this information.
+	paymentDescription []byte
 }
 
 // newAddPacket creates htlc switch add packet which encapsulates the add htlc
 // request and additional information for proper forwarding over htlc switch.
-func newAddPacket(src, dest lnwire.ShortChannelID,
-	htlc *lnwire.UpdateAddHTLC, obfuscator Obfuscator) *addPacket {
+func newAddPacket(src, dest lnwire.ShortChannelID, htlc *lnwire.UpdateAddHTLC,
+	obfuscator Obfuscator, pubKey *btcec.PublicKey, desc []byte) *addPacket {
 
 	return &addPacket{
-		dest:       dest,
-		src:        src,
-		htlc:       htlc,
-		obfuscator: obfuscator,
+		dest:               dest,
+		src:                src,
+		htlc:               htlc,
+		obfuscator:         obfuscator,
+		senderPubKey:       pubKey,
+		paymentDescription: desc,
 	}
 }
 

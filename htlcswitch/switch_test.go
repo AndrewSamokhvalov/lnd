@@ -61,7 +61,7 @@ func TestSwitchForward(t *testing.T) {
 			PaymentHash: rhash,
 			Amount:      1,
 		}, newMockObfuscator(),
-	)
+		nil, nil)
 
 	// Handle the request and checks that bob channel link received it.
 	if err := s.forward(addPacket); err != nil {
@@ -138,7 +138,7 @@ func TestSwitchCancel(t *testing.T) {
 			PaymentHash: rhash,
 			Amount:      1,
 		}, newMockObfuscator(),
-	)
+		nil, nil)
 
 	// Handle the request and checks that bob channel link received it.
 	if err := s.forward(addPacket); err != nil {
@@ -214,7 +214,7 @@ func TestSwitchAddSamePayment(t *testing.T) {
 			PaymentHash: rhash,
 			Amount:      1,
 		}, newMockObfuscator(),
-	)
+		nil, nil)
 
 	// Handle the request and checks that bob channel link received it.
 	if err := s.forward(addPacket); err != nil {

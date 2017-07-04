@@ -26,12 +26,16 @@ func TestPaymentNotificationsClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to register listener: %v", err)
 	}
+	defer listener.Stop()
 
 	ntf1 := struct{}{}
 	client.Notify(chanID, ntf1)
 
+	// Check that we not sending in closed listener channel.
+	client.Notify(chanID, ntf1)
+
 	select {
-	case ntf2 := <-listener.notifications:
+	case ntf2 := <-listener.Notifications:
 		if ntf1 != ntf2 {
 			t.Fatal("notification are different")
 		}
