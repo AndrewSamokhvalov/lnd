@@ -14,6 +14,7 @@ import:
   subpackages:
   - proto
 - package: github.com/howeyc/gopass
+- package: github.com/AndrewSamokhvalov/grpc-web
 - package: github.com/roasbeef/btcd
   version: 34fdda7d41cc47d9456550fd1147a77db89f601a
   subpackages:

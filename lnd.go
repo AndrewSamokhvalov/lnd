@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	"github.com/AndrewSamokhvalov/grpc-web/go/grpcweb"
 	flags "github.com/btcsuite/go-flags"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/lightningnetwork/lnd/channeldb"
@@ -216,6 +217,7 @@ func lndMain() error {
 	opts := []grpc.ServerOption{grpc.Creds(sCreds)}
 	grpcServer := grpc.NewServer(opts...)
 	lnrpc.RegisterLightningServer(grpcServer, rpcServer)
+	wrappedServer := grpcweb.WrapServer(grpcServer)
 
 	// Next, Start the gRPC server listening for HTTP/2 connections.
 	grpcEndpoint := fmt.Sprintf("localhost:%d", loadedConfig.RPCPort)
@@ -250,6 +252,22 @@ func lndMain() error {
 		rpcsLog.Infof("gRPC proxy started at localhost%s", restEndpoint)
 		http.ListenAndServeTLS(restEndpoint, cfg.TLSCertPath,
 			cfg.TLSKeyPath, mux)
+	}()
+
+	go func() {
+		handler := func(resp http.ResponseWriter, req *http.Request) {
+			wrappedServer.ServeHTTP(resp, req)
+		}
+
+		httpServer := http.Server{
+			Addr:    "0.0.0.0:9999",
+			Handler: http.HandlerFunc(handler),
+		}
+
+		rpcsLog.Infof("gRPC-web started at 0.0.0.0:9999")
+		if err := httpServer.ListenAndServe(); err != nil {
+			rpcsLog.Errorf("failed to start grpc-web http server: %v", err)
+		}
 	}()
 
 	// If we're not in simnet mode, We'll wait until we're fully synced to

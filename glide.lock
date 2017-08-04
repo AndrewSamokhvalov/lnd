@@ -1,5 +1,5 @@
-hash: d40636a5875b6dedd06b34514ea3430717c02153ecd16f32aa5bcedeedd6a833
-updated: 2017-08-02T21:19:34.129016558-07:00
+hash: aa611a18387b92018ff50d90f7095c959c775de24a28a9debff1ce60449ae341
+updated: 2017-08-04T16:47:11.786830573+03:00
 imports:
 - name: github.com/aead/chacha20
   version: d31a916ded42d1640b9d89a26f8abd53cc96790c
@@ -7,6 +7,10 @@ imports:
   - chacha
 - name: github.com/aead/siphash
   version: e404fcfc888570cadd1610538e2dbc89f66af814
+- name: github.com/AndrewSamokhvalov/grpc-web
+  version: 6eb5abffe8055dc0718780271f057c7b3fa5e983
+  subpackages:
+  - go/grpcweb
 - name: github.com/awalterschulze/gographviz
   version: 9d8c9780eb4766351ae8489f78cb940cb6e0503d
   subpackages:
@@ -124,6 +128,8 @@ imports:
   - walletdb
   - walletdb/bdb
   - wtxmgr
+- name: github.com/rs/cors
+  version: 8dd4211afb5d08dbb39a533b9bb9e4b486351df6
 - name: github.com/tv42/zbase32
   version: 501572607d0273fc75b3b261fa4904d63f6ffa0e
 - name: github.com/urfave/cli
